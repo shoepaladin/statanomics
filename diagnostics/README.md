@@ -1,6 +1,5 @@
 # Diagnostics for Feature Selection and Assessing Balance
 ## Documentation
-POC: Julian Hsu (@hsujulia)
 22 Aug 2021
 
 **selection**.hdm_selection(*data_est, 
