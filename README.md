@@ -14,3 +14,12 @@ Propensity-score-based models to estimate the average treatment effect and avera
 
 ## 2. diagnostics
 Various metrics and tests to asses the unconfoundedness and overlap assumptions - following the potential outcomes models. There are no tests for the stable unit treatment value assumption (SUTVA).
+
+## 3. causal_inference_cc
+Causal Inference Crash Course which is a series of slides/presentations that covers the basics of causal inference. The audience is a scientist interested in learning about causal inference. This is a WiP series. As of Oct-2021, this presentation covers the foundations, matching-based models, and inference properties of matching-based models.
+
+## 4. heterogeneousresiduals
+A custom implementation of a heterogeneous treatment effects version for double machine learning, based on The Heterogeneous Residuals model builds on Semenova, Goldman, Chernozhukov, and Taddy (2021).
+
+
+
