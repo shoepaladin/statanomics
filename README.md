@@ -1,12 +1,13 @@
 # statanomics
+23oct2021
+***
 Here is a one-stop shop of:
-1. causal inference models to estimate average treatment effects (ATE/ATET);
-2. causal inference models to estimate Heterogeneous Treatment Effects (HTE); and
-3. diagnostics for assess underlying assumptions needed for causal inference following the Neyman-Rubin's Potential Outcomes model.
+1. teaching material for scientists interested in learning more about causal inference
+2. causal inference models to estimate average treatment effects (ATE/ATET);
+3. causal inference models to estimate Heterogeneous Treatment Effects (HTE); 
+4. diagnostics for assess underlying assumptions needed for causal inference following the Neyman-Rubin's Potential Outcomes model.
 
 The API and syntaxes are centralized, so you can swap one model for another just by changing the functional call!
-
-
 
 ## causal_inference_cc
 Causal Inference Crash Course which is a series of slides/presentations that covers the basics of causal inference. The audience is a scientist interested in learning about causal inference. This is a WiP series. As of Oct-2021, this presentation covers the foundations, matching-based models, and inference properties of matching-based models.
@@ -19,6 +20,7 @@ Propensity-score-based models to estimate the average treatment effect and avera
 	- regressions with discrete outcomes
 	- instrumental variable (IV) regression via 2SLS
 	- difference-in-difference
+	- heterogeneous treatment effect (HTE) / conditional average treatment effect (CATE) models
 * No current plans to support:
 	- propensity score matching models
 	- kernel and local regression models
