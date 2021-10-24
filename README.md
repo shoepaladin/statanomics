@@ -13,7 +13,18 @@ Causal Inference Crash Course which is a series of slides/presentations that cov
 
 
 ## causalmodels
-Propensity-score-based models to estimate the average treatment effect and average treatment effect on the treated. While models such as OLS, double robust, and inverse propensity-weighting models are covered, propensity score matching models are not (because they are hard). 
+Propensity-score-based models to estimate the average treatment effect and average treatment effect on the treated. While models such as OLS, double robust, and inverse propensity-weighting models are supported.
+* Pending functions:
+	- quantile regression 
+	- regressions with discrete outcomes
+	- instrumental variable (IV) regression via 2SLS
+	- difference-in-difference
+* No current plans to support:
+	- propensity score matching models
+	- kernel and local regression models
+	- synthetic control models
+	
+
 
 ## diagnostics
 Various metrics and tests to asses the unconfoundedness and overlap assumptions - following the potential outcomes models. There are no tests for the stable unit treatment value assumption (SUTVA).
