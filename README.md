@@ -2,10 +2,9 @@
 update date 23oct2021
 ***
 Here is a one-stop shop of:
-1. teaching material for scientists interested in learning more about causal inference
-2. causal inference models to estimate average treatment effects (ATE/ATET);
-3. causal inference models to estimate Heterogeneous Treatment Effects (HTE); 
-4. diagnostics for assess underlying assumptions needed for causal inference following the Neyman-Rubin's Potential Outcomes model.
+1. causal inference models to estimate average treatment effects (ATE/ATET);
+2. causal inference models to estimate Heterogeneous Treatment Effects (HTE); 
+3. diagnostics for assess underlying assumptions needed for causal inference following the Neyman-Rubin's Potential Outcomes model.
 
 The API and syntaxes are centralized, so you can swap one model for another just by changing the functional call!
 
