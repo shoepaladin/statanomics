@@ -1,5 +1,5 @@
 # statanomics
-23oct2021
+update date 23oct2021
 ***
 Here is a one-stop shop of:
 1. teaching material for scientists interested in learning more about causal inference
