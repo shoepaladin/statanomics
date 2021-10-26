@@ -65,12 +65,13 @@ _under construction_
 
 ### other.DR
 Based on "Optimal doubly robust estimation of heterogeneous causal effects" from https://arxiv.org/abs/2004.14497 Note that this does not do the kernel weighting version needed. This version can either output the pseudo_outcome, for which standard errors are not provided.
-    * aux_dictionary['force_second_stage']    (str) {None, 'OLS','CVLasso', 'Lasso'}
-        None   -  provides the pseudo-outcomes, no standard errors provided!
-        'OLS'  -  does the second stage OLS regression 
-        'CVLasso' - does feature selection with CV Lasso and OLS regression with a two-way split
-        'Lasso' - does feature selection with a Lasso and OLS regression with a two-way split
-    * other_output['coefficients']		 Dataframe of OLS coefficients from regression the proxy HTE on *het_feature*
+
+* aux_dictionary['force_second_stage']    (str) {None, 'OLS','CVLasso', 'Lasso'}
+	- None   -  provides the pseudo-outcomes, no standard errors provided!
+	- 'OLS'  -  does the second stage OLS regression 
+	- 'CVLasso' - does feature selection with CV Lasso and OLS regression with a two-way split
+	- 'Lasso' - does feature selection with a Lasso and OLS regression with a two-way split
+* other_output['coefficients']		 Dataframe of OLS coefficients from regression the proxy HTE on *het_feature*
 
 ### other.het_ols
 	This is just heterogeneous OLS, where each feature in *het_feature* is interacted with *treatment_name*
