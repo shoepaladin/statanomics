@@ -12,7 +12,7 @@
 # 
 # 
 
-# In[1]:
+# In[28]:
 
 
 import pandas as pd
@@ -44,7 +44,7 @@ from sklearn.metrics import mean_squared_error
 # These functions will do a lot of predictions, so try to standardize the prediction models.
 # 
 
-# In[2]:
+# In[29]:
 
 
 from sklearn import metrics
@@ -75,7 +75,7 @@ class predQC:
                }
 
 
-# In[3]:
+# In[30]:
 
 
 class bootstrap:
@@ -118,7 +118,30 @@ class bootstrap:
 #                aux_dictionary)
 
 
-# In[4]:
+# In[31]:
+
+
+## Standardized function for assigning data splits WITHOUT reordering the data
+def block_splits(data_est=pd.DataFrame(), split_name='splits', n_data_splits=4):
+    ## assign data-splitting based on a sequence.
+    ## This assumes the data is already randomly sorted, but it accommodates cases where the
+    ## propensity score or predicted outcome is already estimated
+    data_est[split_name] = np.zeros(len(data_est))
+    interval = int( len(data_est) / n_data_splits)
+    for p in range(n_data_splits):
+        lower = interval*p
+        upper = interval*(p+1)
+        if p==n_data_splits-1:
+            upper = len(data_est)
+        mask2 = np.zeros(len(data_est))
+        mask2[lower:upper] = 1
+        mask2 = pd.Series(mask2.astype(bool))
+        data_est.loc[mask2.to_list(), split_name] = p
+    
+        
+
+
+# In[32]:
 
 
 ## Standardized Function for Predicting the Treatment Indicator.
@@ -165,7 +188,7 @@ def predict_continuous(dataset, split_name, n_data_splits, feature,outcome, mode
  
 
 
-# In[5]:
+# In[33]:
 
 
 def ols_vanilla(data_est, 
@@ -176,7 +199,7 @@ def ols_vanilla(data_est,
     return {'ATE TE':ols.params[1], 'ATE SE': ols.bse[1],'ATT TE':ols.params[1], 'ATT SE': ols.bse[1]}
 
 
-# In[30]:
+# In[34]:
 
 
 def propbinning(data_est, 
@@ -202,9 +225,8 @@ def propbinning_main(data_est,
                n_data_splits,
                aux_dictionary):
         
-    data_est[split_name] = np.random.choice(n_data_splits, len(data_est), replace=True)
-    data_est = data_est.sort_values(by=split_name)
-        
+    block_splits(df, split_name, n_data_splits)
+
     ## Predict Treatment
     that = predict_treatment_indicator(data_est, split_name, n_data_splits, feature_name,treatment_name,tmodel)
     data_est['that'] = that
@@ -244,7 +266,7 @@ def propbinning_main(data_est,
     return {'ATE TE':np.average(treatment_estimate), 'ATE SE': np.std(treatment_estimate),            'ATT TE':np.average(treatment_estimate[(data_est[treatment_name]==1)]), 'ATT SE': np.std(treatment_estimate[(data_est[treatment_name]==1)]),            'PScore':that}
 
 
-# In[36]:
+# In[35]:
 
 
 '''
@@ -259,9 +281,7 @@ def ipw_main(data_est,
                 ymodel,tmodel,
                n_data_splits,
                aux_dictionary):
-    ## Create and sort by splits
-    data_est[split_name] = np.random.choice(n_data_splits, len(data_est), replace=True)
-    data_est.sort_values(by=split_name, inplace=True)
+    block_splits(df, split_name, n_data_splits)
 
     ## 1st Stage: Predict treatment indicator
     that = predict_treatment_indicator(data_est, split_name, n_data_splits, feature_name,treatment_name,tmodel)
@@ -296,7 +316,7 @@ def ipw(data_est,
     return {'ATE TE':ipw_bt_results['ATE mean'], 'ATE SE': ipw_bt_results['ATE std'], 'ATT TE':ipw_bt_results['ATT mean'], 'ATT SE': ipw_bt_results['ATT std'], 'PScore': main_result['PScore']}
 
 
-# In[10]:
+# In[36]:
 
 
 '''
@@ -312,9 +332,7 @@ def ipw_wls(data_est,
                 ymodel,tmodel,
                n_data_splits,
                aux_dictionary):
-    ## Create and sort by splits
-    data_est[split_name] = np.random.choice(n_data_splits, len(data_est), replace=True)
-    data_est.sort_values(by=split_name, inplace=True)
+    block_splits(df, split_name, n_data_splits)
 
     ## 1st Stage: Predict treatment indicator
     that = predict_treatment_indicator(data_est, split_name, n_data_splits, feature_name,treatment_name,tmodel)
@@ -339,7 +357,7 @@ def ipw_wls(data_est,
     return {'ATE TE':wls.params[1], 'ATE SE': wls.bse[1], 'ATT TE':wls_att.params[1], 'ATT SE': wls_att.bse[1], 'PScore':that}
 
 
-# In[11]:
+# In[37]:
 
 
 def dml_plm(data_est, 
@@ -348,23 +366,31 @@ def dml_plm(data_est,
                n_data_splits,
                aux_dictionary):
 
-    ## Create and sort by splits
-    data_est[split_name] = np.random.choice(n_data_splits, len(data_est), replace=True)
-    data_est.sort_values(by=split_name, inplace=True)
-
+    block_splits(df, split_name, n_data_splits)
+    
     ## 1st Stage: Predict treatment indicator
-    that = predict_treatment_indicator(data_est, split_name, n_data_splits, feature_name,treatment_name,tmodel)
+    if ('that' in aux_dictionary.keys() ):
+        if (aux_dictionary['that'] != None).any():
+            that = aux_dictionary['that'][:]
+    else:
+        that = predict_treatment_indicator(data_est, split_name, n_data_splits, feature_name,treatment_name,tmodel)
         
-    ## Residualize treatment and outcome    
-    outcome_hat = []        
-    for r in np.arange(n_data_splits):
-        train = (data_est[split_name] != r)
-        test = (data_est[split_name]==r)
-        ols = ymodel.fit(data_est[feature_name][train==True],data_est[outcome_name][train==True])
-        prediction = ols.predict(data_est[feature_name][test==True])
-        outcome_hat.extend(prediction)
+    ## Residualize outcome
+    if ('yhat' in aux_dictionary.keys() ):
+        if (aux_dictionary['yhat'] != None).any():
+            outcome_hat = aux_dictionary['yhat'][:]
+        
+    else:
+        ## Create and sort by splits
+        outcome_hat = []        
+        for r in np.arange(n_data_splits):
+            train = (data_est[split_name] != r)
+            test = (data_est[split_name]==r)
+            ols = ymodel.fit(data_est[feature_name][train==True],data_est[outcome_name][train==True])
+            prediction = ols.predict(data_est[feature_name][test==True])
+            outcome_hat.extend(prediction)
 
-    outcome_hat = np.array(outcome_hat)
+        outcome_hat = np.array(outcome_hat)
     
     treatment_residual = data_est[treatment_name].to_numpy() - that
     outcome_residual = data_est[outcome_name].to_numpy() - outcome_hat
@@ -378,18 +404,22 @@ def dml_plm(data_est,
     return {'ATE TE':finalmodel_fit.params[-1], 'ATE SE': finalmodel_fit.bse[-1],         'ATT TE':finalmodel_fit.params[-1], 'ATT SE': finalmodel_fit.bse[-1], 'PScore':that}
 
 
-# In[18]:
+# In[39]:
 
 
 def dml_irm(data_est, 
                 split_name, feature_name, outcome_name, treatment_name,
                 ymodel,tmodel,
                n_data_splits, aux_dictionary ):
-    data_est[split_name] = np.random.choice(n_data_splits, len(data_est), replace=True)
-    data_est = data_est.sort_values(by=split_name)
+    block_splits(df, split_name, n_data_splits)
 
+        
     ## 1st Stage: Predict treatment indicator
-    that = predict_treatment_indicator(data_est, split_name, n_data_splits, feature_name,treatment_name,tmodel)
+    if ('that' in aux_dictionary.keys() ):
+        if (aux_dictionary['that'] != None):
+            that = aux_dictionary['that'][:]
+    else:
+        that = predict_treatment_indicator(data_est, split_name, n_data_splits, feature_name,treatment_name,tmodel)
     
     ## 2nd Stage: Predict counterfactual outcomes
     yhat_treat, yhat_control = predict_counterfactual_outcomes(data_est, split_name, n_data_splits, feature_name, treatment_name, outcome_name,ymodel)
@@ -448,4 +478,141 @@ def dml_irm(data_est,
     return {'ATE TE':np.mean(treatment_estimate), 'ATE SE': SE,         'ATT TE':np.mean(treatment_estimate_att), 'ATT SE': SE_ATT, 'PScore':that}
     
 
+
+# <a id='Section2'></a>
+# 
+# ## Bring in Simulated Data
+# Pretend we've never seen this data before, and do balance checks between treatment and control 
+# 
+# For fun, use the Friedman function: https://www.sfu.ca/~ssurjano/fried.html
+
+# In[40]:
+
+
+def generate_data():
+    N = 1000
+    
+    cov = [[1.00, 0.08, 0.05, 0.05],
+           [0.08, 1.00,-0.08,-0.02],
+           [0.05,-0.08, 1.00,-0.10],
+           [0.05,-0.02,-0.10, 1.00]]
+    cov = np.eye(4)
+    X = np.random.multivariate_normal(np.zeros(4), cov,N)
+    x1,x2,x3,x4= X[:,0],X[:,1],X[:,2],X[:,3]
+
+    treatment_latent = 2*np.sin( np.pi * x4 * x3) + 10*(x2-0.5)**2 - 10*x1
+    m,s = np.average(treatment_latent), np.std(treatment_latent)
+
+    treatment_latent = (treatment_latent - m) / s
+    
+    random_t = np.random.normal(0,1,N)
+    
+    treatment_latent += random_t
+    
+    treatment = np.array( np.exp(treatment_latent) / (1+ np.exp(treatment_latent)) > np.random.uniform(0,1,N) ).astype(np.int32)
+
+#     Y = 100 +0.5*x1 - 6*x2 + -2*x4*x1 + 0.5*x1*x2 - 7*(x3+1)**(0.5) + 8/(0.5+x3+x4)
+    Y = 100 + 10*np.sin( np.pi * x1 * x2) + 20*(x3-0.5)**2 - 10*x4
+#     GT = np.std(Y)
+    random_y = np.random.normal(0,1,N)
+
+    GT = 5
+    Y += np.random.normal(1,2,N)
+    Y += GT*(treatment==1) 
+    
+    df_est = pd.DataFrame({'x1':x1, 'x2':x2,'x3':x3,'x4':x4,'treatment':treatment, 'Y':Y, 'GT':GT} )
+    df_est['x1_2'] = df_est['x1'].pow(2)
+    df_est['x2_2'] = df_est['x2'].pow(2)
+    df_est['x3_2'] = df_est['x3'].pow(2)
+    df_est['x4_2'] = df_est['x4'].pow(2)    
+    return df_est
+
+
+# In[41]:
+
+
+model_max_iter = 500
+## treatment prediction models
+t_models = {}
+t_models['LogitCV'] = LogisticRegressionCV(cv=5, random_state=27, n_jobs=-1)
+t_models['logit'] = LogisticRegression(penalty='l2',solver='lbfgs', C=1, max_iter=model_max_iter, fit_intercept=True)
+t_models['logit_L1_C2'] = LogisticRegression(penalty='l1',C=2, max_iter=model_max_iter, fit_intercept=True)
+t_models['logit_L2_C5'] = LogisticRegression(penalty='l2',C=2, max_iter=model_max_iter, fit_intercept=True)
+t_models['rf_md10'] = RandomForestClassifier(n_estimators=25,max_depth=10, min_samples_split=200,n_jobs=-1)
+t_models['rf_md3'] = RandomForestClassifier(n_estimators=25,max_depth=3, min_samples_split=200,n_jobs=-1)
+t_models['nn'] = MLPClassifier(solver='lbfgs', alpha=1e-5, hidden_layer_sizes=(3, 2), random_state=1,max_iter=model_max_iter)
+## outcome prediction models
+y_models = {}
+y_models['LassoCV'] = LassoCV(cv=5, n_jobs=-1, normalize=True, random_state=27)
+y_models['ols'] = LinearRegression()
+y_models['lasso_a2'] = Lasso(alpha=2,max_iter=model_max_iter)
+y_models['ridge_a2'] = Ridge(alpha=2,max_iter=model_max_iter)
+y_models['rf_md10'] = RandomForestRegressor(n_estimators=25,max_depth=10, min_samples_split=200,n_jobs=-1)
+y_models['rf_md3'] = RandomForestRegressor(n_estimators=25,max_depth=3, min_samples_split=200,n_jobs=-1)
+y_models['nn'] = MLPRegressor(alpha=1e-5, hidden_layer_sizes=(3, 2), random_state=1, max_iter=model_max_iter)
+
+
+# In[42]:
+
+
+n_data_splits = 4
+aux_dictionary = {'n_bins': 2, 'n_trees':2, 'max_depth':2, 
+                  'upper':0.999, 'lower':0.001,
+                  'subsample_ratio':0.5,
+                 'bootstrapreps':10 }
+bootstrap_number = 100
+
+
+# In[43]:
+
+
+df = generate_data()
+
+feature_list = [x for x in df.columns if 'x' in x]
+
+ols = ols_vanilla(df, 
+                'splits', feature_list, 'Y', 'treatment',
+                y_models['LassoCV'],t_models['LogitCV'],
+               n_data_splits, aux_dictionary )
+pbin = propbinning(df, 
+                'splits', feature_list, 'Y', 'treatment',
+                y_models['LassoCV'],t_models['LogitCV'],
+               n_data_splits, aux_dictionary )
+plm = dml_plm(df, 
+                'splits', feature_list, 'Y', 'treatment',
+                y_models['LassoCV'],t_models['LogitCV'],
+               n_data_splits, aux_dictionary )
+irm = dml_irm(df, 
+                'splits', feature_list, 'Y', 'treatment',
+                y_models['LassoCV'],t_models['LogitCV'],
+               n_data_splits, aux_dictionary )
+ip = ipw(df, 
+                'splits', feature_list, 'Y', 'treatment',
+                y_models['LassoCV'],t_models['LogitCV'],
+               n_data_splits, aux_dictionary )
+ip_wls = ipw_wls(df, 
+                'splits', feature_list, 'Y', 'treatment',
+                y_models['LassoCV'],t_models['LogitCV'],
+               n_data_splits, aux_dictionary )
+
+
+# In[44]:
+
+
+for n,r in zip([ols_vanilla, propbinning, dml_plm, dml_irm, ipw, ipw_wls], [ols, pbin, plm, irm, ip, ip_wls]):
+    print('{0}  ATE {1:5.3f}[{2:5.3f}] '.format(n.__name__, r['ATE TE'], r['ATE SE']))
+    print('{0}  ATT {1:5.3f}[{2:5.3f}] '.format(n.__name__, r['ATT TE'], r['ATT SE']))
+    
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+''
 
