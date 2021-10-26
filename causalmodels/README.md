@@ -13,7 +13,7 @@
     n_data_splits   (int) number of splits in the data
     aux_dictionary  (dict) contains various elements, specialized for each function
     
-###het_dml_approaches.HR()
+### het_dml_approaches.HR()
         aux_dictionary['force_second_stage']    (str) {None, 'OLS','CVLasso', 'Lasso'}
         None   -  provides the pseudo-outcomes, no standard errors provided!
         'OLS'  -  does the second stage OLS regression 
@@ -21,7 +21,7 @@
         'Lasso' - does feature selection with a Lasso and OLS regression with a two-way split
 The Heterogeneous Residuals model builds on Semenova, Goldman, Chernozhukov, and Taddy (2021) - https://arxiv.org/abs/1712.09988 - by residualzing the entire matrix of heterogeneous treatments, rather than residualizing only the treatment variable. This means it reframe heterogeneous treatment effects as a multiple treatments problem.
 
-###het_dml_approaches.SGCT()
+### het_dml_approaches.SGCT()
         aux_dictionary['force_second_stage']    (str) {None, 'OLS','CVLasso', 'Lasso'}
         None   -  provides the pseudo-outcomes, no standard errors provided!
         'OLS'  -  does the second stage OLS regression 
@@ -29,7 +29,7 @@ The Heterogeneous Residuals model builds on Semenova, Goldman, Chernozhukov, and
         'Lasso' - does feature selection with a Lasso and OLS regression with a two-way split
 An implementation of Semenova, Goldman, Chernozhukov, and Taddy (2021) - https://arxiv.org/abs/1712.09988. 
 
-###trees.grf
+### trees.grf
 I am basically doing a wrapper for _econml_'s implementation of GRF.
 Check out it's documentation here: https://econml.azurewebsites.net/_autosummary/econml.grf.CausalForest.html
     aux_dictionary['criterion']       'mse','het', default='mse'
@@ -37,12 +37,12 @@ Check out it's documentation here: https://econml.azurewebsites.net/_autosummary
     aux_dictionary['inference']        (default=True) whether inference should be ienabled via out-of-bag bootstrap
     aux_dictionary['subforest_size']   (default=4) The number of trees in each sub-forest that is used in the bootstrap-of-little-bags calculation. The parameter n_estimators must be divisible by subforest_size. Should typically be a small constant. 	
 
-###gml.blp_estimate()
+### gml.blp_estimate()
 _under construction_    
-###gml.gates()
+### gml.gates()
 _under construction_    
 
-###other.DR
+### other.DR
     Based on "Optimal doubly robust estimation of heterogeneous causal effects" 
     from https://arxiv.org/abs/2004.14497
     note that this does not do the kernel weighting version needed.
@@ -55,7 +55,7 @@ _under construction_
         'CVLasso' - does feature selection with CV Lasso and OLS regression with a two-way split
         'Lasso' - does feature selection with a Lasso and OLS regression with a two-way split
 
-###other.het_ols
+### other.het_ols
 	This is just heterogeneous OLS, where each feature in *het_feature* is interacted with *treatment_name*
 	
 
@@ -85,26 +85,26 @@ A dictionary with the following elements:
 * 'ATT SE': the ATT treatment estimate
 * 'PScore': the propensity score, only available if the function explicitly calculates one
 
-###ols_vanilla( ) 
+### ols_vanilla( ) 
 This is your regular ordinary least squares (OLS) model. Note that ATE is the same as ATT here because of the constant treatment effects assumption.
 
-###propbinning( )
+### propbinning( )
 This uses a combination of regression adjustment and propensity binning models to estimate the average treatment effect. The high-level design is to first estimate propensity scores, divide them into a set number of equal sized bins (aux_dictionary['n_bins']), then use different regression models for each bin. 
 
 
-###ipw( )
+### ipw( )
 This implements inverse propensity weighting where it directly requires treatment and control outcomes to estimate the average treatment effect. 
                
 
-###ipw_wls( ) 
+### ipw_wls( ) 
 This uses inverse propensity weighting and estimate the average treatment effect using a weighted least squares regression. 
 
                               
-###dml_plm( ) 
+### dml_plm( ) 
 This implements the Partial Linear Model from the Chernozhukov et al. (2018) _Double/Debiased Machine Learning for Treatmentand Structural Parameters_. Note that ATE is the same as ATT here because of the constant treatment effects assumption.
 
 
-###dml_irm( ) 
+### dml_irm( ) 
 This implements the Interactive Regression Model from the Chernozhukov et al. (2018) _Double/Debiased Machine Learning for Treatmentand Structural Parameters_ to estimate the average treatment effect.
 
                
