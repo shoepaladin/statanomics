@@ -24,37 +24,39 @@ A list with the following elements:
 
     
 ### het_dml_approaches.HR()
-        aux_dictionary['force_second_stage']    (str) {None, 'OLS','CVLasso', 'Lasso'}
-        None   -  provides the pseudo-outcomes, no standard errors provided!
-        'OLS'  -  does the second stage OLS regression 
-        'CVLasso' - does feature selection with CV Lasso and OLS regression with a two-way split
-        'Lasso' - does feature selection with a Lasso and OLS regression with a two-way split
 The Heterogeneous Residuals model builds on Semenova, Goldman, Chernozhukov, and Taddy (2021) - https://arxiv.org/abs/1712.09988 - by residualzing the entire matrix of heterogeneous treatments, rather than residualizing only the treatment variable. This means it reframe heterogeneous treatment effects as a multiple treatments problem.
-        other_output['coefficients']	Dataframe of OLS coefficients from regression the proxy HTE on *het_feature*
-        other_output['Treatment outcome metric']		$R^2$ of predicting the treatment
+
+* aux_dictionary['force_second_stage']    (str) {None, 'OLS','CVLasso', 'Lasso'}
+	- None   -  provides the pseudo-outcomes, no standard errors provided!
+	- 'OLS'  -  does the second stage OLS regression 
+	- 'CVLasso' - does feature selection with CV Lasso and OLS regression with a two-way split
+	- 'Lasso' - does feature selection with a Lasso and OLS regression with a two-way split
+* other_output['coefficients']	Dataframe of OLS coefficients from regression the proxy HTE on *het_feature*
+* other_output['Treatment outcome metric']		$R^2$ of predicting the treatment
 
 ### het_dml_approaches.SGCT()
-        aux_dictionary['force_second_stage']    (str) {None, 'OLS','CVLasso', 'Lasso'}
-        None   -  provides the pseudo-outcomes, no standard errors provided!
-        'OLS'  -  does the second stage OLS regression 
-        'CVLasso' - does feature selection with CV Lasso and OLS regression with a two-way split
-        'Lasso' - does feature selection with a Lasso and OLS regression with a two-way split
 An implementation of Semenova, Goldman, Chernozhukov, and Taddy (2021) - https://arxiv.org/abs/1712.09988. 
 
-        other_output['coefficients']	Dataframe of OLS coefficients from regression the proxy HTE on *het_feature*
-        other_output['Treatment outcome metric']		$R^2$ of predicting the treatment
+* aux_dictionary['force_second_stage']    (str) {None, 'OLS','CVLasso', 'Lasso'}
+	- None   -  provides the pseudo-outcomes, no standard errors provided!
+	- 'OLS'  -  does the second stage OLS regression 
+	- 'CVLasso' - does feature selection with CV Lasso and OLS regression with a two-way split
+	- 'Lasso' - does feature selection with a Lasso and OLS regression with a two-way split
+
+* other_output['coefficients']	Dataframe of OLS coefficients from regression the proxy HTE on *het_feature*
+* other_output['Treatment outcome metric']		$R^2$ of predicting the treatment
     
 ### trees.grf
 I am basically doing a wrapper for _econml_'s implementation of GRF.
 Check out it's documentation here: https://econml.azurewebsites.net/_autosummary/econml.grf.CausalForest.html
-        aux_dictionary['criterion']       'mse','het', default='mse'
-        aux_dictionary['honest']           (default=True) whether trees should be trained in an honest manner.
-        aux_dictionary['inference']        (default=True) whether inference should be ienabled via out-of-bag bootstrap
-        aux_dictionary['subforest_size']   (default=4) The number of trees in each sub-forest that is used in the bootstrap-of-little-bags calculation. The parameter n_estimators must be divisible by subforest_size. Should typically be a small constant. 	
+* aux_dictionary['criterion']       'mse','het', default='mse'
+* aux_dictionary['honest']           (default=True) whether trees should be trained in an honest manner.
+* aux_dictionary['inference']        (default=True) whether inference should be ienabled via out-of-bag bootstrap
+* aux_dictionary['subforest_size']   (default=4) The number of trees in each sub-forest that is used in the bootstrap-of-little-bags calculation. The parameter n_estimators must be divisible by subforest_size. Should typically be a small constant. 	
 
-    other_output['alpha']	the alpha value used for inference
-    other_output['jac']		the conditional jacobian values
-    other_output['hte_feature_importance']		The feature importances based on the amount of parameter heterogeneity they create. The higher, the more important the feature. The importance of a feature is computed as the (normalized) total heterogeneity that the feature creates. 
+* other_output['alpha']	the alpha value used for inference
+* other_output['jac']		the conditional jacobian values
+* other_output['hte_feature_importance']		The feature importances based on the amount of parameter heterogeneity they create. The higher, the more important the feature. The importance of a feature is computed as the (normalized) total heterogeneity that the feature creates. 
 
 
 
