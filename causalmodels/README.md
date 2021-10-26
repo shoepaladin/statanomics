@@ -76,7 +76,7 @@ Based on "Optimal doubly robust estimation of heterogeneous causal effects" from
 * other_output['coefficients']		 Dataframe of OLS coefficients from regression the proxy HTE on *het_feature*
 
 ### other.het_ols
-	This is just heterogeneous OLS, where each feature in *het_feature* is interacted with *treatment_name*
+This is just heterogeneous OLS, where each feature in *het_feature* is interacted with *treatment_name*
 	
 
 ## ATE Library
