@@ -592,7 +592,7 @@ class ate:
                     ymodel,tmodel,
                    n_data_splits,
                    aux_dictionary)
-        pbin_bt_results = bootstrap.go_reps(aux_dictionary['bootstrapreps'], propbinning_main, data_est, 
+        pbin_bt_results = bootstrap.go_reps(aux_dictionary['bootstrapreps'], ate.propbinning_main, data_est, 
                         split_name, feature_name, outcome_name, treatment_name,
                         ymodel,tmodel,
                        n_data_splits,
@@ -686,7 +686,7 @@ class ate:
                     ymodel,tmodel,
                    n_data_splits,
                    aux_dictionary)
-        ipw_bt_results = bootstrap.go_reps(aux_dictionary['bootstrapreps'], ipw_main, data_est, 
+        ipw_bt_results = bootstrap.go_reps(aux_dictionary['bootstrapreps'], ate.ipw_main, data_est, 
                         split_name, feature_name, outcome_name, treatment_name,
                         ymodel,tmodel,
                        n_data_splits,
