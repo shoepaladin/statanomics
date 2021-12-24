@@ -943,8 +943,7 @@ class hte:
                     ols_coef_pd[test_i] = coef_pd.copy()
 
                 other_output = {'coefficients':ols_coef_pd}
-    #                             'Treatment outcome metric':t_r2, 
-    #                             'Outcome prediction metric':y_r2}
+
 
             ## Output the treatment estimate and propensity scores
             return output_treatment_estimate, output_se_hat, that, output_baseline_hat, other_output    
@@ -1215,8 +1214,8 @@ class hte:
                 ols_coef_pd[test_i] = coef_pd.copy()
 
 
-            other_output = {'coefficients':ols_coef_pd, 
-                            'Treatment outcome metric':t_r2}
+            other_output = {'coefficients':ols_coef_pd}
+
             ## Output the treatment estimate and propensity scores
             return output_treatment_estimate, output_se_hat, that, output_baseline_hat, other_output
 
@@ -1309,8 +1308,8 @@ class hte:
                 output_se_hat.extend(list(se_estimate))            
                 ols_coef_pd[test_i] = coef_pd.copy()
 
-            other_output = {'coefficients':ols_coef_pd, 
-                            'Treatment outcome metric':t_r2}
+            other_output = {'coefficients':ols_coef_pd} 
+
             ## Output the treatment estimate and propensity scores
             return output_treatment_estimate, output_se_hat, that, output_baseline_hat, other_output
 
