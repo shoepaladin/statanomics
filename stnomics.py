@@ -262,6 +262,7 @@ class secondstage:
             X = sm.add_constant(train_data[het_feature])            
 
             lasso_selection = LassoCV(cv=5, random_state=27, n_jobs=-1).fit(X, train_data['y'])
+            lasso_max_iter = 1000
             lasso_fit = Lasso(alpha=lasso_selection.alpha_, max_iter=lasso_max_iter).fit(X, train_data['y']) 
             selected_lasso_features = []
             for x,b in zip(X.columns, lasso_fit.coef_):
