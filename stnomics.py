@@ -587,7 +587,7 @@ class ate:
                     ymodel,tmodel,
                    n_data_splits,
                    aux_dictionary):
-        main_result = propbinning_main(data_est, 
+        main_result = ate.propbinning_main(data_est, 
                     split_name, feature_name, outcome_name, treatment_name,
                     ymodel,tmodel,
                    n_data_splits,
@@ -681,7 +681,7 @@ class ate:
                     ymodel,tmodel,
                    n_data_splits,
                    aux_dictionary):
-        main_result = ipw_main(data_est, 
+        main_result = ate.ipw_main(data_est, 
                     split_name, feature_name, outcome_name, treatment_name,
                     ymodel,tmodel,
                    n_data_splits,
