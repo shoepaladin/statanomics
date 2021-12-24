@@ -23,6 +23,8 @@ import statsmodels.api as sm
 import statsmodels.formula.api as smf
 from sklearn import metrics
 
+from sklearn.linear_model import LogisticRegression, LogisticRegressionCV, LinearRegression, Lasso, LassoCV, Ridge
+
 
 from matplotlib import gridspec
 import matplotlib.pyplot as plt
