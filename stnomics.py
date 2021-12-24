@@ -605,7 +605,7 @@ class ate:
                    n_data_splits,
                    aux_dictionary):
 
-        block_splits(df, split_name, n_data_splits)
+        block_splits(data_est, split_name, n_data_splits)
 
         ## Predict Treatment
         that = predict_treatment_indicator(data_est, split_name, n_data_splits, feature_name,treatment_name,tmodel)
@@ -659,7 +659,7 @@ class ate:
                     ymodel,tmodel,
                    n_data_splits,
                    aux_dictionary):
-        block_splits(df, split_name, n_data_splits)
+        block_splits(data_est, split_name, n_data_splits)
 
         ## 1st Stage: Predict treatment indicator
         that = predict_treatment_indicator(data_est, split_name, n_data_splits, feature_name,treatment_name,tmodel)
@@ -710,7 +710,7 @@ class ate:
                     ymodel,tmodel,
                    n_data_splits,
                    aux_dictionary):
-        block_splits(df, split_name, n_data_splits)
+        block_splits(data_est, split_name, n_data_splits)
 
         ## 1st Stage: Predict treatment indicator
         that = predict_treatment_indicator(data_est, split_name, n_data_splits, feature_name,treatment_name,tmodel)
@@ -743,7 +743,7 @@ class ate:
                        n_data_splits,
                        aux_dictionary):
 
-            block_splits(df, split_name, n_data_splits)
+            block_splits(data_est, split_name, n_data_splits)
 
             ## 1st Stage: Predict treatment indicator
             if ('that' in aux_dictionary.keys() ):
@@ -788,7 +788,7 @@ class ate:
                         split_name, feature_name, outcome_name, treatment_name,
                         ymodel,tmodel,
                        n_data_splits, aux_dictionary ):
-            block_splits(df, split_name, n_data_splits)
+            block_splits(data_est, split_name, n_data_splits)
 
 
             ## 1st Stage: Predict treatment indicator
