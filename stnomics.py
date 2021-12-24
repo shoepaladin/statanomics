@@ -937,7 +937,7 @@ class hte:
                 for test_i,train_i in zip(['0','1'], ['1','0']):            
                     test_data = data_est_half[test_i]
                     train_data = data_est_half[train_i]
-                    treatment_estimate,se_estimate, coef_pd = second_stage_no_interactions(approach, test_data, train_data, het_feature )                    
+                    treatment_estimate,se_estimate, coef_pd = secondstage.second_stage_no_interactions(approach, test_data, train_data, het_feature )                    
                     output_treatment_estimate.extend(list(treatment_estimate))            
                     output_se_hat.extend(list(se_estimate))            
                     ols_coef_pd[test_i] = coef_pd.copy()
