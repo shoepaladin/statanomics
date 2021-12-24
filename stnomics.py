@@ -892,7 +892,7 @@ class hte:
             block_splits(data_est, 'splits', n_data_splits)
 
             ## Calculate propensity score
-            that, t_r2 = predict_treatment_indicator(data_est, 'splits', n_data_splits, feature_name,treatment_name, tmodel)
+            that = predict_treatment_indicator(data_est, 'splits', n_data_splits, feature_name,treatment_name, tmodel)
 
             ## Calculcate the counterfactual outcomes
             yhat_treat, yhat_control = predict_counterfactual_outcomes(data_est, 'splits', n_data_splits, feature_name, treatment_name, outcome_name,ymodel)
@@ -1121,7 +1121,7 @@ class hte:
             block_splits(data_est, 'splits', n_data_splits)
 
             ## 1st Stage: Predict treatment indicator
-            that, t_r2 = predict_treatment_indicator(data_est, 'splits', n_data_splits, feature_name,treatment_name, tmodel)
+            that = predict_treatment_indicator(data_est, 'splits', n_data_splits, feature_name,treatment_name, tmodel)
             ## 1st Stage: Predict treatment indicator interacted with each feature
             ## remember to remove the feature interacted with the treatment as a predictor
             residual_treatment_hat = [data_est[treatment_name] - that]
@@ -1231,7 +1231,7 @@ class hte:
             block_splits(data_est, 'splits', n_data_splits)
 
             ## 1st Stage: Predict treatment indicator
-            that, t_r2 = predict_treatment_indicator(data_est, 'splits', n_data_splits, feature_name,treatment_name, tmodel)
+            that = predict_treatment_indicator(data_est, 'splits', n_data_splits, feature_name,treatment_name, tmodel)
 
             ## 1st Stage: Residualize Treatment Indicator
             residual_treatment_hat = data_est[treatment_name] - that 

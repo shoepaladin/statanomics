@@ -258,8 +258,7 @@ def predict_treatment_indicator(dataset, split_name, n_data_splits, feature,trea
         lg = model.fit(dataset[feature][train==True],dataset[treatment][train==True])
         prediction = lg.predict_proba(dataset[feature][test==True])[:,1]
         treatment_hat.extend(prediction)
-    t_r2 = r2(dataset[treatment], treatment_hat)
-    return np.array(treatment_hat), t_r2
+    return np.array(treatment_hat)
 
 
 ## Standardized Function for Predicting Counterfactual Outcomes.
@@ -313,7 +312,7 @@ class other:
         block_splits(data_est, 'splits', n_data_splits)
         
         ## Calculate propensity score
-        that, t_r2 = predict_treatment_indicator(data_est, 'splits', n_data_splits, feature_name,treatment_name, tmodel)
+        that = predict_treatment_indicator(data_est, 'splits', n_data_splits, feature_name,treatment_name, tmodel)
         
         ## Calculcate the counterfactual outcomes
         yhat_treat, yhat_control = predict_counterfactual_outcomes(data_est, 'splits', n_data_splits, feature_name, treatment_name, outcome_name,ymodel)
@@ -550,7 +549,7 @@ class gml:
                      aux_dictionary, data_splits, hte_model):
         block_splits(data_est, 'splits', n_data_splits)
         
-        that, t_r2 = predict_treatment_indicator(data_est, 'splits', n_data_splits, feature_name,treatment_name, tmodel)
+        that = predict_treatment_indicator(data_est, 'splits', n_data_splits, feature_name,treatment_name, tmodel)
 
         data_est['prob'] = that
         reported_beta_list = []
@@ -704,7 +703,7 @@ class het_dml_approaches:
         block_splits(data_est, 'splits', n_data_splits)
         
         ## 1st Stage: Predict treatment indicator
-        that, t_r2 = predict_treatment_indicator(data_est, 'splits', n_data_splits, feature_name,treatment_name, tmodel)
+        that = predict_treatment_indicator(data_est, 'splits', n_data_splits, feature_name,treatment_name, tmodel)
         ## 1st Stage: Predict treatment indicator interacted with each feature
         ## remember to remove the feature interacted with the treatment as a predictor
         residual_treatment_hat = [data_est[treatment_name] - that]
@@ -814,7 +813,7 @@ class het_dml_approaches:
         block_splits(data_est, 'splits', n_data_splits)
         
         ## 1st Stage: Predict treatment indicator
-        that, t_r2 = predict_treatment_indicator(data_est, 'splits', n_data_splits, feature_name,treatment_name, tmodel)
+        that = predict_treatment_indicator(data_est, 'splits', n_data_splits, feature_name,treatment_name, tmodel)
 
         ## 1st Stage: Residualize Treatment Indicator
         residual_treatment_hat = data_est[treatment_name] - that 
