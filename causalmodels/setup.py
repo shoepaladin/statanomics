@@ -1,13 +1,14 @@
 from setuptools import setup
 
-setup(
-    name='atelibrary',
-    version='0.0.5',
+from my_pip_package import __version__
 
-    url='https://github.com/shoepaladin/statanomics/causalmodels',
+setup(
+    name='my_pip_package',
+    version='0.0.5',
+    url='https://github.com/shoepaladin/statanomics/',
     author='Julian Hsu',
     author_email='tarobum27@gmail.com',
     license='MIT',
-    py_modules=['atelibrary'],
-    install_requires=['numpy','statsmodels','scipy','econml],
+    py_modules=['my_pip_package','ATELibrary'],
+    install_requires=['numpy','statsmodels'],
 )
