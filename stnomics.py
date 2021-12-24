@@ -186,9 +186,11 @@ class secondstage:
             ## Train lasso on the training dataset, and recover the selected features.
             ## As a default, keep the main treatment residual in the selected features.
             X = sm.add_constant(train_data[covar_list])            
+            lasso_max_iter = 1000
 
             lasso_selection = LassoCV(cv=5, random_state=27, n_jobs=-1).fit(X, train_data['y'])
             lasso_fit = Lasso(alpha=lasso_selection.alpha_, max_iter=lasso_max_iter).fit(X, train_data['y']) 
+            
             selected_lasso_features = []
             for x,b in zip(X.columns, lasso_fit.coef_):
                 if (b != 0) & (x!='const') & (x !='t'):
