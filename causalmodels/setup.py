@@ -7,10 +7,10 @@ setup(
     version='0.0.5',
     version=__version__,
 
-    url='https://github.com/shoepaladin/statanomics/',
+    url='https://github.com/shoepaladin/statanomics/causalmodels',
     author='Julian Hsu',
     author_email='tarobum27@gmail.com',
     license='MIT',
-    py_modules=['my_pip_package','ATELibrary'],
-    install_requires=['numpy','statsmodels','spicy','economy'],
+    py_modules=['ATELibrary', 'HTELibrary'],
+    install_requires=['numpy','statsmodels','scipy'],
 )
