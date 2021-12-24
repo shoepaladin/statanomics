@@ -11,6 +11,6 @@ setup(
     author='Julian Hsu',
     author_email='tarobum27@gmail.com',
     license='MIT',
-    py_modules=['my_pip_package''],
+    py_modules=['my_pip_package'],
     install_requires=['numpy','statsmodels'],
 )
