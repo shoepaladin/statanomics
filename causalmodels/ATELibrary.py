@@ -293,7 +293,7 @@ def ipw_main(data_est,
     
     ipw_a_att = ipw_a * that
 
-    results = np.average(ipw_a[keep_these] - ipw_b[keep_these]), np.std(ipw_a[keep_these] - ipw_b[keep_these] ),        np.average( (ipw_a[keep_these] - ipw_b[keep_these])*that ),  np.std( (ipw_a[keep_these] - ipw_b[keep_these])*that ),        that
+    results = np.average(ipw_a[keep_these] - ipw_b[keep_these]), np.std(ipw_a[keep_these] - ipw_b[keep_these] ),        np.average( (ipw_a[keep_these] - ipw_b[keep_these])*that ),  np.std( (ipw_a[keep_these] - ipw_b[keep_these])*that[keep_these] ),        that[keep_these]
         
     return {'ATE TE':results[0], 'ATE SE': results[1], 'ATT TE':results[2], 'ATT SE': results[3], 'PScore':results[4]}
 
@@ -543,7 +543,7 @@ t_models['rf_md3'] = RandomForestClassifier(n_estimators=25,max_depth=3, min_sam
 t_models['nn'] = MLPClassifier(solver='lbfgs', alpha=1e-5, hidden_layer_sizes=(3, 2), random_state=1,max_iter=model_max_iter)
 ## outcome prediction models
 y_models = {}
-y_models['LassoCV'] = LassoCV(cv=5, n_jobs=-1, normalize=True, random_state=27)
+y_models['LassoCV'] = LassoCV(cv=5, n_jobs=-1, random_state=27)
 y_models['ols'] = LinearRegression()
 y_models['lasso_a2'] = Lasso(alpha=2,max_iter=model_max_iter)
 y_models['ridge_a2'] = Ridge(alpha=2,max_iter=model_max_iter)

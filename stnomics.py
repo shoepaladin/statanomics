@@ -379,7 +379,7 @@ class diagnostics:
             selection_coeff_names = pd.DataFrame()
             for n,y in zip( ['outcome','treatment'], [outcome_name, treatment_name]):        
                 if n=='outcome':
-                    lasso_selection = LassoCV(cv=5, random_state=27, normalize=True, n_jobs=-1).fit(data_est[feature_name], data_est[y]) 
+                    lasso_selection = LassoCV(cv=5, random_state=27, n_jobs=-1).fit(data_est[feature_name], data_est[y]) 
                     lasso_fit = Lasso(alpha=lasso_selection.alpha_, max_iter=200000).fit(data_est[feature_name], data_est[y]) 
                 else:
                     lasso_selection = LogisticRegressionCV(cv=5, random_state=27, penalty='l2', n_jobs=-1).fit(data_est[feature_name], data_est[y]) 
@@ -686,7 +686,7 @@ class ate:
 
         ipw_a_att = ipw_a * that
 
-        results = np.average(ipw_a[keep_these] - ipw_b[keep_these]), np.std(ipw_a[keep_these] - ipw_b[keep_these] ),        np.average( (ipw_a[keep_these] - ipw_b[keep_these])*that ),  np.std( (ipw_a[keep_these] - ipw_b[keep_these])*that ),        that
+        results = np.average(ipw_a[keep_these] - ipw_b[keep_these]), np.std(ipw_a[keep_these] - ipw_b[keep_these] ),        np.average( (ipw_a[keep_these] - ipw_b[keep_these])*that ),  np.std( (ipw_a[keep_these] - ipw_b[keep_these])*that[keep_these] ),        that[keep_these]
 
         return {'ATE TE':results[0], 'ATE SE': results[1], 'ATT TE':results[2], 'ATT SE': results[3], 'PScore':results[4]}
 
