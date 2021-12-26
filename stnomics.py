@@ -690,7 +690,7 @@ class ate:
 
         ipw_a_att = ipw_a * that
 
-        results = np.average(ipw_a[keep_these] - ipw_b[keep_these]), np.std(ipw_a[keep_these] - ipw_b[keep_these] ),        np.average( (ipw_a[keep_these] - ipw_b[keep_these])*that ),  np.std( (ipw_a[keep_these] - ipw_b[keep_these])*that[keep_these] ),        that[keep_these]
+        results = np.average(ipw_a[keep_these] - ipw_b[keep_these]), np.std(ipw_a[keep_these] - ipw_b[keep_these] ),        np.average( (ipw_a[keep_these] - ipw_b[keep_these])*that[keep_these] ),  np.std( (ipw_a[keep_these] - ipw_b[keep_these])*that[keep_these] ),        that[keep_these]
 
         return {'ATE TE':results[0], 'ATE SE': results[1], 'ATT TE':results[2], 'ATT SE': results[3], 'PScore':results[4]}
 
