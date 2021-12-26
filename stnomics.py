@@ -25,6 +25,10 @@ from sklearn import metrics
 
 from sklearn.linear_model import LogisticRegression, LogisticRegressionCV, LinearRegression, Lasso, LassoCV, Ridge
 
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+
 from econml.grf import CausalForest, RegressionForest
 
 
