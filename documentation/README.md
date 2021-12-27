@@ -1,7 +1,7 @@
 # Documentation
 
 ## stnomics.ate
-**Average Treatment Effects models**, with an example in: ATE_Functions.ipynb. . Each of these models use the same inputs, so I will go through the inputs once here. The outputs will vary across models, and I will detail each of these per model.
+**Average Treatment Effects models**, with examples in the [ATE example](https://github.com/shoepaladin/statanomics/blob/main/examples/ATE\%20Functions.ipynb). Each of these models use the same inputs, so I will go through the inputs once here. The outputs will vary across models, and I will detail each of these per model.
 
 *Inputs:*              
 * data_est (pandas dataframe) - pandas dataframe name that contains the outcome, treatment indicator, and other features
@@ -94,7 +94,6 @@ An implementation of Semenova, Goldman, Chernozhukov, and Taddy (2021) - https:/
 * other_output['Treatment outcome metric']		$R^2$ of predicting the treatment
     
 ###  stnomics.hte.trees.grf
-
 This implements  [econml](https://github.com/microsoft/EconML)'s GRF.
 Check out it's documentation here: https://econml.azurewebsites.net/_autosummary/econml.grf.CausalForest.html
 * aux_dictionary['criterion']       'mse','het', default='mse'
