@@ -48,7 +48,7 @@ This implements the Interactive Regression Model from the Chernozhukov et al. (2
 
 
 ## stnomics.hte
-**Heterogeneous Treatment Effects models**, with an example in: HTE_Model_Specs.ipynb. Each of these models use the same input API, so I will go through the inputs once here. The outputs will vary across models. I will only indicate when a function may take a specialized input based on 'aux_dictionary'
+**Heterogeneous Treatment Effects models**, with some demonstrations in the [HTE example notebook](https://github.com/shoepaladin/statanomics/blob/main/examples/HTE_Model_Specs.ipynb). Each of these models use the same input API, so I will go through the inputs once here. The outputs will vary across models. I will only indicate when a function may take a specialized input based on 'aux_dictionary'
 
 *Inputs:*     
     data_est        (obj) name of the PanDas dataframe 
@@ -131,6 +131,7 @@ This is just heterogeneous OLS, where each feature in *het_feature* is interacte
 
 
 ## stnomics.diagnostics
+A series of functions that can be used to diagnose the unconfoundedness/conditional independence assumption/exogeneity assumptions for causal inference, following the potential outcomes mental model. Some examples can be found in [this example notebook](https://github.com/shoepaladin/statanomics/blob/main/examples/Testing\%20Overlap\%20Feature\%20Balance.ipynb).
 
 ### stnomics.diagnostics.selection.hdm_selection(*data_est, 
                         feature_name, outcome_name, treatment_name*)
