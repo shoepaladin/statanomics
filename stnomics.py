@@ -596,6 +596,7 @@ class ate:
                     split_name, feature_name, outcome_name, treatment_name,
                     ymodel,tmodel,
                    n_data_splits, aux_dictionary ):
+
         ols = sm.OLS(data_est[outcome_name], sm.add_constant(data_est[[treatment_name]+feature_name]) ).fit()
         return {'ATE TE':ols.params[1], 'ATE SE': ols.bse[1],'ATT TE':ols.params[1], 'ATT SE': ols.bse[1]}
 

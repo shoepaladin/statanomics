@@ -11,7 +11,7 @@ The API and syntaxes are centralized, so you can swap one model for another just
 ## Installation
 available by 
 ```
-pip install --upgrade git+git://github.com/shoepaladin/statanomics#egg=stnomics
+pip install --upgrade git+https://github.com/shoepaladin/statanomics#egg=stnomics
 ```
 
 ## causalmodels - ATE
