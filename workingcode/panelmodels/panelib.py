@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
+# %%
 
 # # panelib
 # 
@@ -22,7 +23,7 @@
 # 6. Staggered treatment effect for SC and DiD model
 # 
 
-# In[34]:
+# %%
 
 
 import pandas as pd
@@ -42,7 +43,7 @@ from toolz import reduce, partial
 from scipy.optimize import minimize
 
 
-# In[144]:
+# %%
 
 
 import statsmodels.api as sm
@@ -241,7 +242,7 @@ class did:
                'event_study_model':event_model}
 
 
-# In[145]:
+# %%
 
 
 ## Create the univeral function that calls all the different SC models coded up below.
@@ -659,7 +660,7 @@ class dgp:
     
 
 
-# In[146]:
+# %%
 
 
 ## Doudchenko Imbens, (2016) Model
@@ -738,7 +739,7 @@ class di:
         return {'atet': atet_df , 'predict_est':output_df}
 
 
-# In[147]:
+# %%
 
 
 ## Here code up the functions that we will try to minimize over
@@ -784,7 +785,7 @@ class alpha_lambda:
     
 
 
-# In[148]:
+# %%
 
 
 ## Constrained Lasso Model
@@ -874,7 +875,7 @@ class cl:
     
 
 
-# In[149]:
+# %%
 
 
 ## Abadie, Diamond, Hainmueller (2010) model
@@ -959,7 +960,7 @@ class adh:
     
 
 
-# In[150]:
+# %%
 
 
 ## Conformal Inference to do inference for the SC models
