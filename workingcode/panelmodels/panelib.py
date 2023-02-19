@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # coding: utf-8
-# %%
 
 # # panelib
 # 
@@ -23,7 +22,13 @@
 # 6. Staggered treatment effect for SC and DiD model
 # 
 
-# %%
+# In[3]:
+
+
+# !jupyter nbconvert --to script panelib.ipynb
+
+
+# In[42]:
 
 
 import pandas as pd
@@ -31,7 +36,10 @@ import numpy as np
 import os as os 
 
 import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
 from IPython.display import display    
+
+# %load_ext nb_js_diagrammers
 
 import scipy.stats 
 from sklearn.linear_model import ElasticNet
@@ -43,7 +51,26 @@ from toolz import reduce, partial
 from scipy.optimize import minimize
 
 
-# %%
+# In[43]:
+
+
+# %%mermaid_magic -h 450
+
+# flowchart LR
+#     A[Panel Data] --> B[Synthetic Control];
+#     B[Model Choice] --> C[1. Abadie, Diamond and Hainmeuller \n 2. Doudchenko and Imbens \n 3. Constrained Lasso ];
+#     B[Inference] --> D[1. Conformal Inference \n 2. Permutation Test];
+#     C --> E[Placebo test with \n Test/Training \n Pre-Experimental Sample];
+#     D --> E;
+#     E --> Z[1. ATET with inference, and \n 2. Placebo tests that have their own inference];
+#     A --> F[Difference-in-Difference];
+#     F --> G[OLS: TWFE Model];
+#     G --> H[Event-study TWFE model];
+#     H --> Z;
+    
+
+
+# In[44]:
 
 
 import statsmodels.api as sm
@@ -87,6 +114,7 @@ class did:
                      'y_hats','y_hat_counterfactual','y_hat_se','coef_']]
     
     def twfe(data=None,
+             covariates = [],
             data_dict={'treatment':None,
                       'date':None,
                       'post':None,
@@ -94,8 +122,8 @@ class did:
                       'outcome':None}):
         ## Construct the TWFE regression by creating time indicators and unit indicators
         ## This estimate treatment-unit specific treatment effects
-        t_fe = pd.get_dummies(data[data_dict['date']])
-        x_fe = pd.get_dummies(data[data_dict['unitid']])
+        t_fe = pd.get_dummies(data[data_dict['date']]  , drop_first=True, dtype=float)
+        x_fe = pd.get_dummies(data[data_dict['unitid']], drop_first=True, dtype=float)
 
         treated_units = data.loc[data[data_dict['treatment']]==1][data_dict['unitid']].unique().tolist()
 
@@ -106,8 +134,10 @@ class did:
                                                 (data[data_dict['post']]*(data[data_dict['unitid']]==r)).astype(float)})
             else:
                 post_treated['post_x_{0}'.format(r)]=(data[data_dict['post']]*(data[data_dict['unitid']]==r)).astype(float)
-
-        twfe_X = sm.add_constant( pd.concat([post_treated,  t_fe, x_fe ], axis=1)  )
+        if len(covariates)==0:
+            twfe_X = sm.add_constant( pd.concat([post_treated,  t_fe, x_fe ], axis=1)  )
+        else:
+            twfe_X = sm.add_constant( pd.concat([post_treated,  t_fe, x_fe,                                                data[covariates]], axis=1)  )
         twfe_model = sm.OLS(data[data_dict['outcome']],  twfe_X).fit()
         twfe_coef = twfe_model.params.iloc[1:1+len(treated_units)]
         twfe_se = twfe_model.bse.iloc[1:1+len(treated_units)]
@@ -169,7 +199,11 @@ class did:
                                                   (data[data_dict['date']]==t_period)).astype(float)                                          
                                               })],axis=1)
                     pst_treat_columns.append('pst_treat_{0}_{1}'.format(i,t_units_))
-        event_X = sm.add_constant( event_dummies  )
+
+        if len(covariates)==0:
+            event_X = event_X = sm.add_constant( event_dummies  )
+        else:
+            event_X = event_X = sm.add_constant( pd.concat([ event_dummies  ,                                                data[covariates]], axis=1)  )                                        
         event_model = sm.OLS(data[data_dict['outcome']],  event_X).fit()
         event_pre_coef = event_model.params[pre_treat_columns]
         event_pre_se = event_model.bse[pre_treat_columns]
@@ -184,14 +218,25 @@ class did:
         
 
         ## Test whether all pre-trend estimates are different from zero
+        ## Remember to only use the parameters of the post
         A = np.identity(len(event_model.params))
-        A = A[1:,:]
+        remove_row=[]
         for i,name in zip(range(len(event_model.params)), event_model.params.index):
             if 'pre' in name:
-                A[:,i] = 0
+                remove_row.append(i)
             else:
                 pass
-
+        A = A[remove_row]
+        A = A[1:,:]       
+        
+        try:
+            FJointStat = event_model.f_test(A).statistic
+        except:
+            FJointStat = event_model.f_test(A).statistic.item()
+        try:
+            FJointPValue = event_model.f_test(A).pvalue
+        except:
+            FJointPValue = event_model.f_test(A).pvalue.item()            
         event_pre_df = pd.DataFrame(data={
             'pre_event':1,
             'time_period':[x.split('_')[-2] for x in event_pre_coef.index],
@@ -200,20 +245,30 @@ class did:
             'se_':event_pre_se,
             'tstat':event_pre_tstat,
             'pvalue':event_pre_pvalues,
-            'FJointStat':event_model.f_test(A).statistic,
+            'FJointStat':FJointStat,
             'FJointPValue':event_model.f_test(A).pvalue
                               })
         
 
         ## Test whether all pre-trend estimates are different from zero
         A = np.identity(len(event_model.params))
-        A = A[1:,:]
+        remove_row=[]
         for i,name in zip(range(len(event_model.params)), event_model.params.index):
             if 'pst' in name:
-                A[:,i] = 0
+                remove_row.append(i)
             else:
                 pass
+        A = A[remove_row]
+        A = A[1:,:]     
         
+        try:
+            FJointStat = event_model.f_test(A).statistic
+        except:
+            FJointStat = event_model.f_test(A).statistic.item()
+        try:
+            FJointPValue = event_model.f_test(A).pvalue
+        except:
+            FJointPValue = event_model.f_test(A).pvalue.item()        
         event_pst_df = pd.DataFrame(data={
             'pre_event':0,
             'time_period':[ int(x.split('_')[-2]) for x in event_pst_coef.index],
@@ -222,7 +277,7 @@ class did:
             'se_':event_pst_se,
             'tstat':event_pst_tstat,
             'pvalue':event_pst_pvalues,
-            'FJointStat':event_model.f_test(A).statistic,
+            'FJointStat':FJointStat,
             'FJointPValue':event_model.f_test(A).pvalue                   
                               })
 
@@ -242,7 +297,246 @@ class did:
                'event_study_model':event_model}
 
 
-# %%
+# In[45]:
+
+
+class sdid:
+    
+    '''
+    **Final step is to estimate SDID given lambda and omega parameters.
+    '''
+    def twfe_sdid(data=None,
+            data_dict={'treatment':None,
+                      'date':None,
+                      'post':None,
+                      'unitid':None,
+                      'outcome':None}):
+        '''
+        Clean the dataset
+        '''
+        sc_dict = dgp.clean_and_input_data(dataset=data,
+                                           treatment=data_dict['treatment'],
+                                           unit_id = data_dict['unitid'],
+                                           date=data_dict['date'],
+                                           post=data_dict['post'],
+                                          outcome=data_dict['outcome'])        
+
+        
+        '''
+        Step 1 and 2 to estimate lambda and omega
+        '''
+        omega_weights = sdid.estimate_omega(sc_dict['C_pre'],
+                          sc_dict['C_pst'],
+                          sc_dict['T_pre'],
+                          sc_dict['T_pst'])
+        lambda_weights = sdid.estimate_lambda(sc_dict['C_pre'],
+                          sc_dict['C_pst'],
+                          sc_dict['T_pre'],
+                          sc_dict['T_pst'])        
+        ## Write the omega and lambda weights:
+        omega_df = pd.DataFrame()
+        lambda_df = pd.DataFrame()
+        for omega_i,omega_hat in zip(data[data_dict['unitid']].sort_values().unique(),omega_weights):
+            omega_df = pd.concat([omega_df,                            pd.DataFrame(index=[omega_i], data={'omega':omega_hat})])
+#             print('Omega for unit {0}: {1:5.3f}'.format(omega_i, omega_hat))
+        for lambda_t,lambda_hat in zip(data[data_dict['date']].sort_values().unique(),lambda_weights):
+            lambda_t = pd.to_datetime(lambda_t).strftime("%Y-%m-%d")
+#             print('Lambda for time period {0}: {1:5.3f}'.format(lambda_t,
+#                                                                , lambda_hat))        
+            lambda_df = pd.concat([lambda_df,                            pd.DataFrame(index=[lambda_t], data={'lambda':lambda_hat})])
+
+        '''
+        Output the ATET from the final statsmodel, and estimate the counterfactual trend.
+        '''
+        ## Construct the TWFE regression by creating time indicators and unit indicators
+        ## This estimate treatment-unit specific treatment effects
+        treated_units = data.loc[data[data_dict['treatment']]==1][data_dict['unitid']].unique().tolist()
+        treated_na_replace = dict(zip(treated_units, [np.nan]*(len(treated_units))))
+        t_fe = pd.get_dummies(data[data_dict['date']]  ,drop_first=True)
+        x_fe = pd.get_dummies(data[data_dict['unitid']].replace(to_replace=treated_na_replace),
+                              drop_first=True, dummy_na=False)
+
+        ## Estimate a single ATET
+        ## so construct a single indicator 
+        treated_units = data.loc[data[data_dict['treatment']]==1][data_dict['unitid']].unique().tolist()
+        post_treated = pd.DataFrame(
+            data={'post_SDiD': 
+            (data[data_dict['post']]*(data[data_dict['unitid']].isin(treated_units))).astype(float)})
+
+
+        twfe_X = sm.add_constant( pd.concat([post_treated,  t_fe, x_fe ], axis=1)  )
+
+        ## Before we construct the inputs for the OLS model, we need to 
+        ## weight all the observations by the omega and lambda weights.
+        ## To avoid errors from editting the dataframe, create a copy.
+        y_array = data[[data_dict['outcome']]].copy()
+        for omega_i,omega_hat in zip(data[ data_dict['unitid'] ].astype(int).sort_values().unique()
+                                     ,
+                                     omega_weights):
+            twfe_X.loc[data[ data_dict['unitid']]==omega_i ] *= omega_hat
+            y_array.loc[data[ data_dict['unitid']]==omega_i ] *= omega_hat       
+        for lambda_t,lambda_hat in zip(data[ data_dict['date'] ].sort_values().unique()
+                                       ,
+                                       lambda_weights):
+            twfe_X.loc[data[ data_dict['date']]==lambda_t ] *= lambda_hat
+            y_array.loc[data[ data_dict['date']]==lambda_t ] *= lambda_hat
+
+        twfe_model = sm.OLS(y_array,  twfe_X).fit()
+        twfe_coef = twfe_model.params.iloc[0:2]
+        twfe_se = twfe_model.bse.iloc[0:2]
+        twfe_tstat = twfe_model.tvalues.iloc[0:2]
+        twfe_pvalues = twfe_model.pvalues.iloc[0:2]
+
+        df_twfe = pd.DataFrame()
+        for r, coef_, se_, pv_ in zip(twfe_coef.index, twfe_coef, twfe_se, twfe_pvalues):
+            df_twfe = pd.concat([df_twfe,
+                                     pd.DataFrame(index=[r],
+                                                 data={
+                                                      'coef_':coef_,
+                                                      'se_':se_,
+                                                      'pvalue':pv_}  )])  
+        ## Predict counterfactual values
+        c_df = pd.DataFrame()
+        c_df['y'] = twfe_model.predict(twfe_X)
+        c_df[data_dict['date']] = data[data_dict['date']].values
+        c_df[data_dict['unitid']] = data[data_dict['unitid']].values    
+        c_df[data_dict['treatment']] = data[data_dict['treatment']].values    
+        c_df['post_SDiD'] = (data[data_dict['post']]*                             (data[data_dict['unitid']].isin(treated_units))).astype(float)
+        c_df['y_c'] = c_df['y'] - c_df['post_SDiD']*df_twfe['coef_']['post_SDiD']
+        c_df['y_obs'] = y_array.values
+        c_df['stder'] = df_twfe['se_']['post_SDiD']
+        return {'sdid':df_twfe, 'sdid_model':twfe_model,
+                    'omega_weights':omega_df,'lambda_weights':lambda_df,
+                'counterfactual':c_df}    
+    
+    '''
+    **Step 1** Estimate the regularization parameter    
+    '''
+    
+    def comp_reg_parameter(data_control_pre=None,
+                          data_control_pst=None,
+                          data_treat_pre=None,
+                          data_treat_pst=None):
+        T_post = data_control_pst.shape[0]
+        T_pre =  data_control_pre.shape[0]
+        N_tr = data_treat_pst.shape[1]
+        N_co = data_control_pst.shape[1]
+
+        ## Calculate the AR(1) period-to-period change per control units
+        delta_it = data_control_pre.shift(1).iloc[1:] - data_control_pre.iloc[1:]
+        delta_bar = delta_it.sum().sum()
+        delta_bar /= (N_co)*(T_pre-1)
+
+        ## Calculate the variance of AR(1) period-to-period change
+        sigma_hat = np.power( (delta_it - delta_bar), 2 ).sum().sum()
+        sigma_hat /= (N_co)*(T_pre-1)
+        zeta = np.power( N_tr * T_post , 0.25) * np.sqrt(sigma_hat)
+        return zeta    
+    
+    '''
+    **Step 2** Estimate the lambda parameter
+
+    **Step 3** Estimate the omega parameter. Keep in mind that the omega parameter is 
+        estimated without the lambda parameter as an input. In other words, they are 
+        estimated independently.    
+    '''
+    ## This function is used for optmization of lambda
+    def l_unit(omega_array = None,
+                zeta=0,
+               data_control_pre=None,
+                          data_control_pst=None,
+                          data_treat_pre=None,
+                          data_treat_pst=None):
+        omega_0 = omega_array[0]
+        omega_sdid = omega_array[1:]
+        N_tr = data_treat_pst.shape[1]
+
+        control_y = omega_0 + np.dot(data_control_pre, omega_sdid) 
+        treat_y = data_treat_pre.sum(axis=1)
+        treat_y /= N_tr
+
+        regularization = zeta**2 * np.sum( omega_array**2 )
+        control_treat_y = np.sum( (omega_0 + control_y - treat_y)**2 )
+        return control_treat_y + regularization
+    def estimate_omega(data_control_pre=None,
+                          data_control_pst=None,
+                          data_treat_pre=None,
+                          data_treat_pst=None):
+
+        zeta_0 = sdid.comp_reg_parameter(data_control_pre=data_control_pre,
+                      data_control_pst=data_control_pst,
+                      data_treat_pre=data_treat_pre,
+                      data_treat_pst=data_treat_pst)
+        ## Initialize at a given point
+        initial_omega = np.ones(data_control_pre.shape[1]+1)/ data_control_pre.shape[1] 
+
+        omega_weights = fmin_slsqp(partial(sdid.l_unit, 
+                           zeta=zeta_0,
+                          data_control_pre=data_control_pre,
+                          data_control_pst=data_control_pst,
+                          data_treat_pre=data_treat_pre,
+                          data_treat_pst=data_treat_pst),
+                             initial_omega,
+                                 f_eqcons=lambda x: np.sum(x[1:]) - 1,
+                                   bounds=[(0.0, np.inf)]*len(initial_omega),
+                                 iter=50000, 
+                                 disp=False)
+
+
+        return omega_weights    
+
+    def t_unit(lambda_array = None,
+                zeta=0,
+               data_control_pre=None,
+                          data_control_pst=None,
+                          data_treat_pre=None,
+                          data_treat_pst=None):
+        lambda_0 = lambda_array[0]
+        lambda_sdid = lambda_array[1:]
+
+        pre_y = lambda_0 + np.dot(lambda_sdid, data_control_pre)
+        pst_y = data_control_pst.sum(axis=0)
+        pst_y /= data_control_pst.shape[0]
+        ## We do regularization following footnote 3 from SDiD Paper
+        regularization = zeta**2*data_control_pre.shape[1]*np.sum( lambda_array**2 )
+
+        pre_pst_y = np.power(pre_y + pst_y, 2).sum() 
+        return pre_pst_y
+
+
+    def estimate_lambda(data_control_pre=None,
+                          data_control_pst=None,
+                          data_treat_pre=None,
+                          data_treat_pst=None):
+
+        zeta_0 = sdid.comp_reg_parameter(data_control_pre=data_control_pre,
+                      data_control_pst=data_control_pst,
+                      data_treat_pre=data_treat_pre,
+                      data_treat_pst=data_treat_pst)
+        ## Initialize at a given point
+        initial_lambda = np.ones(data_control_pre.shape[0]+1)/ data_control_pre.shape[0] 
+
+        lambda_weights = fmin_slsqp(partial(sdid.t_unit, 
+                           zeta=zeta_0,
+                          data_control_pre=data_control_pre,
+                          data_control_pst=data_control_pst,
+                          data_treat_pre=data_treat_pre,
+                          data_treat_pst=data_treat_pst),
+                             initial_lambda,
+                                 f_eqcons=lambda x: np.sum(x[1:]) - 1,
+                                   bounds=[(0.0, np.inf)]*len(initial_lambda),
+                                 iter=50000, 
+                                 disp=False)
+        return lambda_weights     
+
+
+# In[ ]:
+
+
+
+
+
+# In[46]:
 
 
 ## Create the univeral function that calls all the different SC models coded up below.
@@ -257,7 +551,7 @@ class sc:
                             'unitid':None, 
                             'outcome':None},
                 pre_process_data=None,
-                pre_treatment_window=None,
+                pre_train_test_lengths=None,
                 aggregate_pst_periods=True,
                 inference={'alpha':0.05,
                           'theta_grid':np.arange(-10,10,0.005)}):
@@ -273,8 +567,8 @@ class sc:
             pass
         
         ## Second calculate the pre-treatment-window that can be useful for placebo tests
-        pre_treatment_window = dgp.determine_pre_treatment_window(ci_data_output=pre_process_data,
-                                                                 pre_treatment_window=pre_treatment_window)
+        pre_train_test_lengths = dgp.determine_pre_train_test_lengths(ci_data_output=pre_process_data,
+                                                                 pre_train_test_lengths=pre_train_test_lengths)
         
         
         ## Finally, call an SC model.
@@ -282,7 +576,7 @@ class sc:
             print('Using ADH')
             sc_est = adh.predict_omega(pre_process_data['T_pre'], 
                                     pre_process_data['C_pre'], 
-                                    pre_treatment_window)
+                                    pre_train_test_lengths)
             sc_output = di.sc_style_results(pre_process_data['T_pre'], 
                                              pre_process_data['T_pst'],
                                              pre_process_data['C_pre'], 
@@ -297,7 +591,7 @@ class sc:
             ## Take the alpha and lambda values, and estimate mu and omega
             sc_est = di.predict_mu_omega(pre_process_data['T_pre'], 
                                          pre_process_data['C_pre'], alpha_lambda_to_use, 
-                                         pre_treatment_window)
+                                         pre_train_test_lengths)
             sc_output = di.sc_style_results(pre_process_data['T_pre'], 
                                             pre_process_data['T_pst'],
                                             pre_process_data['C_pre'], 
@@ -308,7 +602,7 @@ class sc:
             print('Using CL')
             sc_est = cl.predict_mu_omega(pre_process_data['T_pre'],
                                       pre_process_data['C_pre'], 
-                                      pre_treatment_window)
+                                      pre_train_test_lengths)
             sc_output = di.sc_style_results(pre_process_data['T_pre'],
                                             pre_process_data['T_pst'],
                                             pre_process_data['C_pre'], 
@@ -317,24 +611,24 @@ class sc:
         else:
             print('SC Model name not supported. \n [adh,di,cl] are supported models.')
         
-        ## Output measures of fit pre-treatment (training), pre_treatment (test), and post-treatment
-        sc_validation = sc.sc_validation(treatment_pre=pre_process_data['T_pre'], 
-                     treatment_pst=pre_process_data['T_pst'],
-                     control_pre=  pre_process_data['C_pre'],
-                     control_pst=  pre_process_data['C_pst'], 
-                     mu=  sc_est['mu'],
-                     omega=sc_est['omega'],
-                     pre_treatment_window=pre_treatment_window)
+#         ## Output measures of fit pre-treatment (training), pre_treatment (test), and post-treatment
+#         sc_validation = sc.sc_validation(treatment_pre=pre_process_data['T_pre'], 
+#                      treatment_pst=pre_process_data['T_pst'],
+#                      control_pre=  pre_process_data['C_pre'],
+#                      control_pst=  pre_process_data['C_pst'], 
+#                      mu=  sc_est['mu'],
+#                      omega=sc_est['omega'],
+#                      pre_train_test_lengths=pre_train_test_lengths)
         
         ## Improve on this by calling for inference results
         sc_df_results = sc.collect_sc_outputs(sc_output = sc_output,
                            pre_process_data=pre_process_data,
                        theta_grid = inference['theta_grid'],
-                           pre_treatment_window=pre_treatment_window, 
+                           pre_train_test_lengths=pre_train_test_lengths, 
                                             aggregate_pst_periods=aggregate_pst_periods,
                                               alpha = inference['alpha'])
         
-        return {**sc_output, 'results_df':sc_df_results}
+        return {**sc_output, 'sc_est':sc_est, 'results_df':sc_df_results}
 
 
     '''
@@ -347,7 +641,7 @@ class sc:
     '''
     def sc_validation(treatment_pre, treatment_pst, control_pre, control_pst, 
                                       mu,omega,
-                                     pre_treatment_window):
+                                     pre_train_test_lengths):
         ## Re-combine the observed treatment and control outcomes
         y_treat_obs = pd.concat([treatment_pre, treatment_pst], axis=0)
         y_control_obs = pd.concat([control_pre, control_pst], axis=0)
@@ -357,42 +651,42 @@ class sc:
 
         from sklearn.metrics import mean_absolute_percentage_error
         def comparison_over_windows(x,y,
-                                    pre_treatment_window,
+                                    pre_train_test_lengths,
                                    metric_func, index_name):
-            x_pre_train = x[0:pre_treatment_window[0]]
-            y_pre_train = y[0:pre_treatment_window[0]]
-            x_pre_test = x[pre_treatment_window[0]:pre_treatment_window[0]+pre_treatment_window[1]]
-            y_pre_test = y[pre_treatment_window[0]:pre_treatment_window[0]+pre_treatment_window[1]]
-            x_pst_test = x[-1*(pre_treatment_window[0]+pre_treatment_window[1]):].copy()
-            y_pst_test = y[-1*(pre_treatment_window[0]+pre_treatment_window[1]):].copy()
+            x_pre_train = x[0:pre_train_test_lengths[0]]
+            y_pre_train = y[0:pre_train_test_lengths[0]]
+            x_pre_test = x[pre_train_test_lengths[0]:pre_train_test_lengths[0]+pre_train_test_lengths[1]]
+            y_pre_test = y[pre_train_test_lengths[0]:pre_train_test_lengths[0]+pre_train_test_lengths[1]]
+            x_pst_test = x[-1*(pre_train_test_lengths[0]+pre_train_test_lengths[1]):].copy()
+            y_pst_test = y[-1*(pre_train_test_lengths[0]+pre_train_test_lengths[1]):].copy()
             test_pre_train = metric_func(x_pre_train, y_pre_train)
             test_pre_test  = metric_func(x_pre_test,  y_pre_test)
             test_pst_test  = metric_func(x_pst_test,  y_pst_test)
             
             return pd.DataFrame(index=[index_name], data={'test_pre_train':test_pre_train,
-                                                          'test_pre_train_N':pre_treatment_window[0],
+                                                          'test_pre_train_N':pre_train_test_lengths[0],
                    'test_pre_test':test_pre_test,
-                   'test_pre_test_N':pre_treatment_window[1],
+                   'test_pre_test_N':pre_train_test_lengths[1],
                    'test_pst_test':test_pst_test,
                     'test_pst_test_N':len(y_pst_test)})
 
         ## Compare the predicted treatment with the observed treatment
         treat_hat_treat_obs = comparison_over_windows(y_treat_hat, y_treat_obs,
-                                                   pre_treatment_window,
+                                                   pre_train_test_lengths,
                                                    mean_absolute_percentage_error,'mape_vs_treat_obs')
         return treat_hat_treat_obs
 
     def sc_validation_gather(counterfactual=None,
                               actual=None,
-                             pre_treatment_window=None):
+                             pre_train_test_lengths=None):
         from sklearn.metrics import mean_absolute_percentage_error        
 
-        x_pre_train = counterfactual[0:pre_treatment_window[0]]
-        y_pre_train = actual[0:pre_treatment_window[0]]
-        x_pre_test = counterfactual[pre_treatment_window[0]:pre_treatment_window[0]+pre_treatment_window[1]]
-        y_pre_test = actual[pre_treatment_window[0]:pre_treatment_window[0]+pre_treatment_window[1]]
-        x_pst_test = counterfactual[-1*(pre_treatment_window[0]+pre_treatment_window[1]):].copy()
-        y_pst_test = actual[-1*(pre_treatment_window[0]+pre_treatment_window[1]):].copy()
+        x_pre_train = counterfactual[0:pre_train_test_lengths[0]]
+        y_pre_train = actual[0:pre_train_test_lengths[0]]
+        x_pre_test = counterfactual[pre_train_test_lengths[0]:pre_train_test_lengths[0]+pre_train_test_lengths[1]]
+        y_pre_test = actual[pre_train_test_lengths[0]:pre_train_test_lengths[0]+pre_train_test_lengths[1]]
+        x_pst_test = counterfactual[-1*(pre_train_test_lengths[0]+pre_train_test_lengths[1]):].copy()
+        y_pst_test = actual[-1*(pre_train_test_lengths[0]+pre_train_test_lengths[1]):].copy()
         test_pre_train = mean_absolute_percentage_error(x_pre_train, y_pre_train)
         test_pre_test  = mean_absolute_percentage_error(x_pre_test,  y_pre_test)
         test_pst_test  = mean_absolute_percentage_error(x_pst_test,  y_pst_test)
@@ -410,7 +704,7 @@ class sc:
     def collect_sc_outputs(sc_output = None,
                            pre_process_data=None,
                            theta_grid = None,  # np.arange(-10,10,0.5),
-                           pre_treatment_window=None,
+                           pre_train_test_lengths=None,
                            aggregate_pst_periods=True,
                       alpha = 0.05):
         
@@ -418,19 +712,19 @@ class sc:
             a = sc.collect_sc_outputs_aggregate(sc_output = sc_output,
                            pre_process_data=pre_process_data,
                            theta_grid = theta_grid,  # np.arange(-10,10,0.5),
-                           pre_treatment_window=pre_treatment_window,
+                           pre_train_test_lengths=pre_train_test_lengths,
                       alpha = 0.05)
         else:
             a = sc.collect_sc_outputs_individual(sc_output = sc_output,
                pre_process_data=pre_process_data,
                theta_grid = theta_grid,  # np.arange(-10,10,0.5),
-               pre_treatment_window=pre_treatment_window,
+               pre_train_test_lengths=pre_train_test_lengths,
               alpha = 0.05)
         return a
     def collect_sc_outputs_individual(sc_output = None,
                            pre_process_data=None,
                            theta_grid = None,  # np.arange(-10,10,0.5),
-                           pre_treatment_window=None,
+                           pre_train_test_lengths=None,
                            aggregate_pst_periods=True,
                       alpha = 0.05):
         ## To do the individual results, just call the function that does that aggregated
@@ -443,7 +737,7 @@ class sc:
         
         ## Create all permutations over all per-treatment periods and just one post-treatment period
         permutations_subset_block_individual = []
-        individual_time_list = np.arange( pre_treatment_window[0]+1 )        
+        individual_time_list = np.arange( pre_train_test_lengths[0]+1 )        
         for i in range(pre_T+1):
             half_A = individual_time_list[-1*(pre_T-i):].copy()
             half_B = individual_time_list[0:i]
@@ -453,19 +747,19 @@ class sc:
         ## Go through different permutations of pre- and post-periods to do inference
         collect_individual_df = pd.DataFrame()
         for t_pst in range(0, pst_T):
-#             print(pre_process_data['treatment_window'])
+#             print(pre_process_data['pre_pst_lengths'])
             pst_index = np.append(np.arange(pre_T) ,[pre_T+t_pst]) 
 
             sc_output_subset = {'atet':sc_output['atet'].iloc[t_pst],
                                'predict_est':sc_output['predict_est'].iloc[pst_index]}
             pre_process_data_subset = {'time_scramble': permutations_subset_block_individual,
-                                      'treatment_window':(pre_process_data['treatment_window'][0]
+                                      'pre_pst_lengths':(pre_process_data['pre_pst_lengths'][0]
                                                          ,
                                                          1)}
             a = sc.collect_sc_outputs_aggregate(sc_output = sc_output_subset,
                                        pre_process_data=pre_process_data_subset,
                                        theta_grid = theta_grid,
-                                       pre_treatment_window=(pre_process_data['treatment_window'][0]
+                                       pre_train_test_lengths=(pre_process_data['pre_pst_lengths'][0]
                                                          ,
                                                          1),
                                   alpha = 0.05,
@@ -477,7 +771,7 @@ class sc:
     def collect_sc_outputs_aggregate(sc_output = None,
                            pre_process_data=None,
                            theta_grid = None,  # np.arange(-10,10,0.5),
-                           pre_treatment_window=None,
+                           pre_train_test_lengths=None,
                           alpha = 0.05,
                                     time_period_forindividual=None): 
         ## Alter this function to collect information that is aggregated across all time periods,
@@ -504,7 +798,7 @@ class sc:
             pv_output = conformal_inf.pvalue_calc(counterfactual=np.array( sc_output['predict_est']['{0}_est'.format(p)].tolist() ),
                                       actual=np.array( sc_output['predict_est']['{0}'.format(p)].tolist() ),
                                       permutation_list =pre_process_data['time_scramble'],
-                                      treatment_window = pre_process_data['treatment_window'],
+                                      pre_pst_lengths = pre_process_data['pre_pst_lengths'],
                                       h0=0)
             sc_pv.append(pv_output)
 
@@ -522,7 +816,7 @@ class sc:
                            y_act=sc_output['predict_est']['{0}'.format(p)].values,
                            theta_grid=theta_grid_use,
                            permutation_list_ci =pre_process_data['time_scramble'],
-                           treatment_window_ci = pre_process_data['treatment_window'],
+                           pre_pst_lengths_ci = pre_process_data['pre_pst_lengths'],
                            alpha=alpha)
 #             print( ci_output['theta_list'] )
 #             print( ci_output['pvalue_list'] )
@@ -532,7 +826,7 @@ class sc:
             ## Calculate the placebo tests for that treated unit too
             placebo_df = sc.sc_validation_gather(counterfactual=np.array( sc_output['predict_est']['{0}_est'.format(p)].tolist() ),
                                       actual=np.array( sc_output['predict_est']['{0}'.format(p)].tolist() ),
-                                     pre_treatment_window=pre_process_data['treatment_window'])
+                                     pre_train_test_lengths=pre_process_data['pre_pst_lengths'])
             sc_placebo_pre_train.append(placebo_df['test_pre_train'].values[0])
             sc_placebo_pre_test.append( placebo_df['test_pre_test'].values[0])
             sc_placebo_pst_test.append( placebo_df['test_pst_test'].values[0]) 
@@ -614,9 +908,9 @@ class sc:
     
 ## DGP and functions to determine what types of SC models to do, and calculate primatives for SC models
 class dgp:    
-    def determine_pre_treatment_window(ci_data_output=None,
-                                      pre_treatment_window=None):
-        if pre_treatment_window ==None:
+    def determine_pre_train_test_lengths(ci_data_output=None,
+                                      pre_train_test_lengths=None):
+        if pre_train_test_lengths ==None:
             pre_treatment_len = ci_data_output['C_pre'].shape[0]
             pre_t0 = int( 0.75*pre_treatment_len )
             if pre_t0 < 1:
@@ -624,10 +918,10 @@ class dgp:
             else:
                 pass            
             pre_t1 = pre_treatment_len - pre_t0
-            pre_treatment_window = [pre_t0, pre_t1]
+            pre_train_test_lengths = [pre_t0, pre_t1]
         else:
             pass
-        return pre_treatment_window 
+        return pre_train_test_lengths 
     
     def clean_and_input_data(dataset=None, 
                              treatment='treated_unit', 
@@ -654,13 +948,13 @@ class dgp:
                 
         return {'C_pre':C_pre, 'C_pst':C_pst, 'T_pre':T_pre, 'T_pst':T_pst, 
                 'time_scramble':permutations_subset_block[0],
-               'treatment_window':permutations_subset_block[1]}
+               'pre_pst_lengths':permutations_subset_block[1]}
         
 
     
 
 
-# %%
+# In[47]:
 
 
 ## Doudchenko Imbens, (2016) Model
@@ -739,7 +1033,7 @@ class di:
         return {'atet': atet_df , 'predict_est':output_df}
 
 
-# %%
+# In[48]:
 
 
 ## Here code up the functions that we will try to minimize over
@@ -785,14 +1079,14 @@ class alpha_lambda:
     
 
 
-# %%
+# In[49]:
 
 
 ## Constrained Lasso Model
 from scipy.optimize import fmin_slsqp
 
 class cl:
-    def cl_obj(params, y,x) -> float:
+    def cl_obj(params, y,x) -> float:        
         return np.mean(  (y - params[0] - np.dot(x,params[1:]))**2)
     
     def predict_mu_omega(treatment_pre, control_pre, holdout_windows):
@@ -875,7 +1169,7 @@ class cl:
     
 
 
-# %%
+# In[50]:
 
 
 ## Abadie, Diamond, Hainmueller (2010) model
@@ -960,7 +1254,7 @@ class adh:
     
 
 
-# %%
+# In[104]:
 
 
 ## Conformal Inference to do inference for the SC models
@@ -973,12 +1267,12 @@ rng.choice(10, size=10, replace=False)
 
 class conformal_inf:
     def time_block_permutation(data=None,
-                              time_unit='date',
-                              post='W'):
-        tw =  len(data.loc[ data[post]==1][time_unit].unique())
-        treatment_window = len(data.loc[(data[post]==0)][time_unit].unique())-tw, tw
+                              time_unit=None,
+                              post=None):
+        
+        pre_pst_lengths = data.groupby(post)[time_unit].nunique().sort_index(ascending=True).to_list()
 
-        time_list = np.arange( np.sum(treatment_window) )
+        time_list = np.arange( np.sum(pre_pst_lengths) )
         T_len = len(time_list)
 
         ## Time block permutations
@@ -990,53 +1284,54 @@ class conformal_inf:
             scrambled_list = np.concatenate([half_A, half_B]) 
             permutations_subset_block.append( list(scrambled_list)  )
 
-        return permutations_subset_block, treatment_window
+        return permutations_subset_block, pre_pst_lengths
 
 
     def scrambled_residual(counterfactual, actual, 
                        scrambled_order,
-                      treatment_window):
+                      pre_pst_lengths):
         '''
         counterfactual   array of counterfactual estimates that are assumed to be ordered sequentially
         actual           ``'' for actual values
         scrambled_order  integer array that tells me how to scramble these
-        treatment_window list of two integers for the number of pre-treatment and post-treatment units
+        pre_pst_lengths list of two integers for the number of pre-treatment and post-treatment units
         '''
         counterfactual_ = counterfactual[scrambled_order].copy()        
         actual_         = actual[scrambled_order].copy()
-        return np.abs(actual_ - counterfactual_)[ -1*treatment_window[1]:]
+        return np.abs(actual_ - counterfactual_)[ -1*pre_pst_lengths[1]:]
     
-    def test_statS(q, treatment_window, residual_abs):
+    def test_statS(q, pre_pst_lengths, residual_abs):
         normed = np.sum(  np.power(residual_abs, q) )
-        return np.power( treatment_window[1]**(-0.5)*normed , 1/q)    
+        return np.power( pre_pst_lengths[1]**(-0.5)*normed , 1/q)    
 
     def pvalue_calc(counterfactual=None,
                     actual=None, 
                     permutation_list=None,
-                   treatment_window=None,
+                   pre_pst_lengths=None,
                    h0 = 0):
-#         print(treatment_window)
-        control_pst = counterfactual[-1*treatment_window[1]:].copy()
-        actual_pst  = actual[-1*treatment_window[1]:].copy()
+        assert np.sum(pre_pst_lengths)==len(actual), "the argument 'pre_pst_lengths' does not cover the entirety of the actual array of outcomes. \n pre_pst_lengths = {0} \n len(actual)= {1}".format(pre_pst_lengths,len(actual))
+        
+#         print(pre_pst_lengths)
+        control_pst = counterfactual[-1*pre_pst_lengths[1]:].copy()
+        actual_pst  = actual[-1*pre_pst_lengths[1]:].copy()
         actual_pst -= h0
 
         ## Calculate the residual
         residual_initial = np.abs(actual_pst - control_pst)         
-        S_q = conformal_inf.test_statS(1, treatment_window, residual_initial)
+        S_q = conformal_inf.test_statS(1, pre_pst_lengths, residual_initial)
 #         print(residual_initial)
         ## Now do a whole bunch of treatment time scrambles
         ## We're going to permute over all time-based permutations
         ## Adjust the actual by the null hypothesis 
         treat_ = actual.copy()
-        treat_[-1*treatment_window[1]:] -= h0
+        treat_[-1*pre_pst_lengths[1]:] -= h0
         full_residual = np.abs(treat_ - counterfactual)
         S_q_pi = []
         for r,r_index in zip(permutation_list, range(len(permutation_list))):
             scrambled_dates = np.array(list(r))              
-            residual_ = full_residual[scrambled_dates][-1*treatment_window[1]:].copy()
-#             if r_index==0:
-#                 print(residual_)            
-            S_q_pi.append(  conformal_inf.test_statS(1, treatment_window, residual_ )  )
+            residual_ = full_residual[scrambled_dates][-1*pre_pst_lengths[1]:].copy()
+#             print(residual_)            
+            S_q_pi.append(  conformal_inf.test_statS(1, pre_pst_lengths, residual_ )  )
             
         p_value = 1 - np.average( (np.array(S_q_pi) < S_q ) )
         return p_value
@@ -1045,7 +1340,7 @@ class conformal_inf:
                y_act=None,
                theta_grid=None,
                 permutation_list_ci = None,
-                treatment_window_ci =None,
+                pre_pst_lengths_ci =None,
                alpha=0.05):
         pv_grid = []
         for t in theta_grid:
@@ -1053,9 +1348,10 @@ class conformal_inf:
             pv = conformal_inf.pvalue_calc(counterfactual=y_hat.copy(),
                         actual=y_act.copy(), 
                         permutation_list = permutation_list_ci,
-                        treatment_window = treatment_window_ci,
+                        pre_pst_lengths = pre_pst_lengths_ci,
                         h0=t)
             pv_grid.append(pv)   
+#             print(t,pv)
         ci_list = [ theta_grid[i] for i in range(len(pv_grid)) if pv_grid[i] > alpha ]
 #         print('\nxxxxxxxx')
 #         for t, p in zip(theta_grid, pv_grid):
@@ -1066,6 +1362,246 @@ class conformal_inf:
 
         
 
+
+# In[ ]:
+
+
+
+
+
+# Test these functions out.
+
+# In[63]:
+
+
+# import numpy as np
+# import pandas as pd
+# pd.options.mode.chained_assignment = None  # default='warn'
+
+# N = 50
+# initial = np.random.uniform(0,2, N)
+# df = pd.DataFrame(data={'y':initial,
+#                   'unit_id':np.arange(N),
+#                        'time':np.zeros(N).astype(int)})
+# for t in range(10):
+#     entry = df.iloc[-1*N:]
+#     entry['y'] = entry['y']*0.80 + np.random.normal(0,1,N)*0.20
+#     entry.loc[[True]*N,'time'] = t
+#     df = pd.concat([df,entry])
+# df['treated']        = df['unit_id'].isin([0,1])
+# df['post'] = (df['time'] > 8)
+# df['W'] =     df['treated']*    df['post']
+# df['unit_id'] = df['unit_id'].apply(str)
+# df.loc[df['W']==True, 'y'] += 5
+# df.drop_duplicates(subset=['unit_id','time','treated'],inplace=True)
+
+
+# SDiD Model Example
+
+# In[53]:
+
+
+# sdid_results = sdid.twfe_sdid(data=df,
+#          data_dict={'treatment':'treated',
+#                    'date':'time',
+#                    'post':'post',
+#                    'unitid':'unit_id',
+#                    'outcome':'y'})
+# print(sdid_results.keys())
+
+
+# In[54]:
+
+
+# print(sdid_results['sdid'])
+# print(sdid_results['sdid_model'].summary())
+
+
+# DiD Model Example
+
+# In[55]:
+
+
+# did_twfe_results = did.twfe(data=df,
+#                            data_dict={'treatment':'treated',
+#                                      'date':'time',
+#                                      'post':'post',
+#                                      'unitid':'unit_id',
+#                                      'outcome':'y'})
+
+
+# In[56]:
+
+
+# data_plot_ =did_twfe_results['twfe_c'].loc[did_twfe_results['twfe_c']['unit_id'].isin(['0','1'])]
+# data_plot_.drop_duplicates(inplace=True)
+
+# for r in ['0','1']:
+#     fig,ax = plt.subplots(ncols=1,nrows=1,figsize=(12,5))
+#     ax.plot(data_plot_.loc[data_plot_['unit_id']==r]['time'],
+#             data_plot_.loc[data_plot_['unit_id']==r]['y_hat_counterfactual'], 
+#             marker='o', linestyle='--',  mfc='none', 
+#             color='black',
+#             label='Predicted for Unit {0}'.format(r))
+#     ax.plot(data_plot_.loc[data_plot_['unit_id']==r]['time'],
+#             data_plot_.loc[data_plot_['unit_id']==r]['y'], 
+#             marker='o', linestyle='solid',  mfc='none', 
+#             color='green',
+#             label='Actual for Unit {0}'.format(r))
+#     ax.vlines(x=data_plot_.loc[(data_plot_['unit_id']==r) & (data_plot_['time'].isin([9])) ]['time'],
+#            ymin=data_plot_.loc[(data_plot_['unit_id']==r) & (data_plot_['time'].isin([9])) ]['y']-1.96*\
+#             data_plot_.loc[(data_plot_['unit_id']==r) & (data_plot_['time'].isin([9])) ]['y_hat_se'],
+#            ymax=data_plot_.loc[(data_plot_['unit_id']==r) & (data_plot_['time'].isin([9])) ]['y']+1.96*\
+#             data_plot_.loc[(data_plot_['unit_id']==r) & (data_plot_['time'].isin([9])) ]['y_hat_se'],
+#               color='orange',
+#              label='95% CI of ATET for Unit {0}'.format(r))
+#     ax.set_xticks(data_plot_.loc[data_plot_['unit_id']=='0']['time'])
+#     ax.set_xticklabels(data_plot_.loc[data_plot_['unit_id']=='0']['time'])
+#     ax.set_ylabel('Outcome of Interest')
+#     ax.set_xlabel('Time Horizon')
+#     ax.legend()
+#     plt.show()
+
+
+# In[57]:
+
+
+# event_placebo_plot_ = did_twfe_results['event_study'].copy()
+# for r in ['0','1']:
+#     fig,ax=plt.subplots(ncols=1,nrows=1,figsize=(10,3))
+#     ax.scatter(event_placebo_plot_.loc[event_placebo_plot_['treated_unit']==r]['time_period'].astype(int),
+#         event_placebo_plot_.loc[event_placebo_plot_['treated_unit']==r]['coef_'],
+#         marker='o', edgecolor='green', label='Estimate with 95% CI for Unit {0}'.format(r))
+#     ax.vlines(x=event_placebo_plot_.loc[event_placebo_plot_['treated_unit']==r]['time_period'].astype(int),
+#             ymin=event_placebo_plot_.loc[event_placebo_plot_['treated_unit']==r]['coef_']-1.96*\
+#               event_placebo_plot_.loc[event_placebo_plot_['treated_unit']==r]['se_'],
+#             ymax=event_placebo_plot_.loc[event_placebo_plot_['treated_unit']==r]['coef_']+1.96*\
+#               event_placebo_plot_.loc[event_placebo_plot_['treated_unit']==r]['se_'],          
+#             linestyle='solid',  color='green')
+#     ax.set_xticks(event_placebo_plot_.loc[event_placebo_plot_['treated_unit']==r]['time_period'].astype(int))
+#     ax.set_xticklabels(event_placebo_plot_.loc[event_placebo_plot_['treated_unit']==r]['time_period'])
+#     ax.set_ylabel('Event Study Estimate')
+#     ax.set_xlabel('Time Horizon')
+#     ax.legend()
+    
+#     plt.show()
+
+
+# In[58]:
+
+
+# display( 
+#     did_twfe_results['twfe_c'].loc[did_twfe_results['twfe_c']['unit_id'].isin(['0','1'])]
+# )
+# display( 
+#     did_twfe_results['event_study_c'].loc[did_twfe_results['event_study_c']['unit_id'].isin(['0','1'])]
+# )
+
+
+# In[ ]:
+
+
+
+
+
+# In[ ]:
+
+
+
+
+
+# SC Model Examples
+
+# In[67]:
+
+
+# # Clean data
+# sc_dict = dgp.clean_and_input_data(dataset=df,
+#                                    treatment='treated',
+#                                    unit_id='unit_id',
+#                                    date='time',
+#                                    post='post',
+#                                   outcome='y')
+# treatment_window_pre_treatment = sc_dict['pre_pst_lengths'][:]
+# ## Figure out the alpha and lambda values
+# w=alpha_lambda.get_alpha_lambda(sc_dict['C_pre'])
+# alpha_lambda_to_use = alpha_lambda.alpha_lambda_transform(w.x)
+# ## Take the alpha and lambda values, and estimate mu and omega
+# di_est = di.predict_mu_omega(sc_dict['T_pre'], sc_dict['C_pre'], alpha_lambda_to_use, 
+#                              treatment_window_pre_treatment)
+# di_output = di.sc_style_results(sc_dict['T_pre'], sc_dict['T_pst'],
+#                     sc_dict['C_pre'], sc_dict['C_pst'],
+#                         di_est['mu'],di_est['omega'])
+# di_validation = sc.sc_validation(treatment_pre=sc_dict['T_pre'], 
+#                  treatment_pst=sc_dict['T_pst'],
+#                  control_pre=sc_dict['C_pre'],
+#                  control_pst=sc_dict['C_pst'], 
+#                  mu=di_est['mu'],
+#                  omega=di_est['omega'],
+#                  pre_train_test_lengths=treatment_window_pre_treatment)
+# di_output['predict_est']
+
+# ak7 = cl.predict_mu_omega(sc_dict['T_pre'], sc_dict['C_pre'], treatment_window_pre_treatment)
+# di_output = di.sc_style_results(sc_dict['T_pre'], sc_dict['T_pst'],
+#                     sc_dict['C_pre'], sc_dict['C_pst'],
+#                     ak7['mu'], ak7['omega'])
+# sc_validation = sc.sc_validation(treatment_pre=sc_dict['T_pre'], 
+#                  treatment_pst=sc_dict['T_pst'],
+#                  control_pre=sc_dict['C_pre'],
+#                  control_pst=sc_dict['C_pst'], 
+#                  mu=ak7['mu'],
+#                  omega=ak7['omega'],
+#                  pre_train_test_lengths=treatment_window_pre_treatment)
+
+
+# In[99]:
+
+
+# p=1
+# pv_output = conformal_inf.pvalue_calc(counterfactual=np.array( di_output['predict_est']['{0}_est'.format(p)].tolist() ),
+#                           actual=np.array( di_output['predict_est']['{0}'.format(p)].tolist() ),
+#                           permutation_list =sc_dict['time_scramble'],
+#                           pre_pst_lengths = sc_dict['pre_pst_lengths'],
+#                           h0=5.1)
+
+
+# In[105]:
+
+
+# fine_grid_trial = np.arange(0,8,0.0001)
+# ci_output = conformal_inf.ci_calc(y_hat=np.array( di_output['predict_est']['{0}_est'.format(p)].tolist() ),
+#                    y_act=np.array( di_output['predict_est']['{0}'.format(p)].tolist() ),
+#                    theta_grid=fine_grid_trial,
+#                    permutation_list_ci = sc_dict['time_scramble'],
+#                    treatment_window_ci = sc_dict['pre_pst_lengths'],
+#                                  alpha=0.05)
+
+
+# In[60]:
+
+
+# f3 = sc.sc_model(model_name='adh',
+#         data=df,
+#         data_dict={'treatment': 'treated',
+#                   'date':'time',
+#                   'post':'post',
+#                   'unitid':'unit_id',
+#                   'outcome':'y'},
+#         pre_process_data=None,
+#                  aggregate_pst_periods=True,
+#         pre_train_test_lengths=None,
+#         inference={'alpha':0.05, 'theta_grid':np.arange(-2,8,0.0151)})
+# display( f3['results_df'] )
+
+
+# In[61]:
+
+
+# sc.sc_generate_figures(final_sc_output=f3,
+#                            output_figure_name=None)
+
+
+# In[ ]:
 
 
 
