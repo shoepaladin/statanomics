@@ -22,7 +22,7 @@
 # 6. Staggered treatment effect for SC and DiD model
 # 
 
-# In[3]:
+# In[4]:
 
 
 # !jupyter nbconvert --to script panelib.ipynb
@@ -1254,7 +1254,7 @@ class adh:
     
 
 
-# In[104]:
+# In[7]:
 
 
 ## Conformal Inference to do inference for the SC models
@@ -1284,6 +1284,19 @@ class conformal_inf:
             scrambled_list = np.concatenate([half_A, half_B]) 
             permutations_subset_block.append( list(scrambled_list)  )
 
+        ## If there are fewer than 20 time block permutations, add 20 more.
+        def add_20_permutations(base_list=None):
+            r=0
+            while r < 20:
+                x=list( np.random.permutation(T_len) )
+                if x not in base_list:
+                    base_list.append(x)
+                    r+=1
+                else:
+                    pass
+            return base_list
+        while len(permutations_subset_block) < 20:
+            permutations_subset_block = add_20_permutations(base_list=permutations_subset_block)
         return permutations_subset_block, pre_pst_lengths
 
 
