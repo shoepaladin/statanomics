@@ -16,7 +16,120 @@ get_ipython().run_line_magic('matplotlib', 'inline')
 import os as os 
 from IPython.display import display    
 
+class coefstab:
+    '''
+    See CoefficientStability.ipynb for more details.
+    
+    inputs are:
+    df             a Pandas dataframe
+    W              string name of the treatment indicator
+    y              string name of the outcome
+    obs_list       list of the strings for the features we are controlling for.
+    beta_hat       a float that represents the true treatment effect we are benchmarking against. The closer this number is to the 
+                   estimated treatment effect, the more room you allow for bias. The further away, the higher the bar you give for bias.
+    r_max          a float on range of (0,1] that represents the MAXIMUM r2 score you could attain. The higher this number is, the
+                   more room you are giving yourself to allow for bias.
+    te_model               [delta_ml only] the model used to estimate the propensity score
+    te_model_dict_inputs   [delta ml only] dictionary of arguments used for the causal model
+    y_model                [delta ml only] the model used to estimate the outcome variable
+                    
+    How do we use beta_max and r_max? These are user determines and represent how likely we think it is that we have a certain amount of bias. A sample statement follows. Suppose that we set beta_max=2 and r_max= 0.99, and calculated a delta of 6.
+    Given the covariates we control for in obs_list, the unobserved covariates needed to increase the R-squared to 0.99 would have to be 6 times more important to eliminating bias so that our estimated treatment becomes 2.
+    
+    '''
+    
+    
+    def delta_ols(df, W, y, obs_list, beta_hat, R_max):    
+        random_partitions = 2
+        df['splits'] = np.random.choice(random_partitions, len(df), replace=True)
+        df.sort_values(by=['splits'], inplace=True)
+        beta_dot = 0
+        R_dot = 0
+        beta_tilde = 0
+        R_tilde= 0
 
+        W_hat = []
+        for r in range(random_partitions):
+            train = df.loc[df['splits']!=r]
+            test = df.loc[df['splits']==r]
+            ## 1. Estimate regression on just W. Remember to use cross-fitting to get the correct R2
+            model_on_train = sm.OLS(train[y],sm.add_constant(train[W]) ).fit()        
+            model_predict_test = model_on_train.predict(sm.add_constant(test[W]) )        
+            beta_dot += model_on_train.params[1] / random_partitions
+            R_dot += np.sqrt(np.corrcoef( model_predict_test, test[y])[0,1]) / random_partitions
+
+            ## 2. Estimate regression on W and observed. Remember to use cross-fitting to get the correct R2
+            model_on_train = sm.OLS(train[y],sm.add_constant(train[[W] + obs_list]) ).fit()        
+            model_predict_test = model_on_train.predict(sm.add_constant(test[[W] + obs_list]) )        
+            beta_tilde += model_on_train.params[1] / random_partitions
+            R_tilde += np.sqrt(np.corrcoef( model_predict_test, test[y])[0,1]) / random_partitions
+
+            ## 3. calculate the expectation of W given the observed features
+            model_on_train = sm.OLS(train[W],sm.add_constant(train[obs_list]) ).fit()        
+            model_predict_test = model_on_train.predict(sm.add_constant(test[obs_list]) )        
+            W_hat.extend(model_predict_test.to_list())
+
+        tau_x = np.var(np.array(df[W]) - W_hat)
+        sigma_x = np.var(df[W])
+        sigma_y = np.var(df[y])
+        A = (beta_tilde - beta_hat)**2 * (tau_x *(beta_dot - beta_tilde)**2 * sigma_x) +\
+            (beta_tilde-beta_hat)**3*(tau_x*sigma_x - tau_x**2)
+
+        numerator = (beta_tilde-beta_hat)*(R_tilde - R_dot)*sigma_y*tau_x + (beta_tilde - beta_hat)*sigma_x*tau_x*(beta_dot - beta_tilde)**2
+        numerator += 2*A
+
+        denominator = (R_max-R_tilde)*sigma_y*(beta_dot - beta_tilde)*sigma_x + (beta_tilde-beta_hat)*(R_max - R_tilde)*sigma_y*(sigma_x - tau_x)
+        denominator +=A
+        return numerator / denominator
+
+    def delta_ml(df, W, y, 
+                       beta_hat, R_max,
+                      te_model, te_model_dict_inputs,
+                    y_model):    
+
+        beta_dot = 0
+        R_dot = 0
+        beta_tilde = 0
+        R_tilde= 0
+
+        ## 1. Estimate regression on just W. 
+        step1 = sm.OLS(df[y],sm.add_constant(df[W]) ).fit()        
+        beta_dot = step1.params[1] 
+        R_dot = step1.rsquared
+
+        ## 2. Estimate regression on W and observed. Remember to use cross-fitting to get the correct R2    
+        step2 = te_r2_output(te_model, te_model_dict_inputs,
+                    y_model)    
+        beta_tilde = step2[0]
+        R_tilde = step2[2]
+
+        ## 3. calculate the expectation of W given the observed features
+        random_partitions = 2
+        df['splits'] = np.random.choice(random_partitions, len(df), replace=True)
+        df.sort_values(by=['splits'], inplace=True)    
+        W_hat = []
+        for r in range(random_partitions):
+            train = df.loc[df['splits']!=r]
+            test = df.loc[df['splits']==r]
+
+            model_on_train = te_model_dict_inputs['tmodel'].fit(sm.add_constant(train[te_model_dict_inputs['feature_name']]), 
+                                                                train[W] )
+            model_predict_test = model_on_train.predict_proba(sm.add_constant(test[te_model_dict_inputs['feature_name']]) )[:,1]
+            W_hat.extend(model_predict_test)
+
+
+        tau_x = np.var(np.array(df[W]) - W_hat)
+        sigma_x = np.var(df[W])
+        sigma_y = np.var(df[y])
+        A = (beta_tilde - beta_hat)**2 * (tau_x *(beta_dot - beta_tilde)**2 * sigma_x) +\
+            (beta_tilde-beta_hat)**3*(tau_x*sigma_x - tau_x**2)
+
+        numerator = (beta_tilde-beta_hat)*(R_tilde - R_dot)*sigma_y*tau_x + (beta_tilde - beta_hat)*sigma_x*tau_x*(beta_dot - beta_tilde)**2
+        numerator += 2*A
+
+        denominator = (R_max-R_tilde)*sigma_y*(beta_dot - beta_tilde)*sigma_x + (beta_tilde-beta_hat)*(R_max - R_tilde)*sigma_y*(sigma_x - tau_x)
+        denominator +=A
+        return numerator / denominator
 
 class selection:
 
