@@ -366,6 +366,37 @@ class bootstrap:
 class diagnostics:
 
     class coefstab:
+        from sklearn.metrics import r2_score
+        def te_r2_output(te_model, te_model_dict_inputs,
+                        y_model):
+            '''
+            This function outputs treatment estimates, standard, and the R-squared from any general model.
+            '''
+
+            ## Call the treatment effect estimator
+            te = te_model(te_model_dict_inputs['data_est'],
+                     te_model_dict_inputs['split_name'],
+                     te_model_dict_inputs['feature_name'],
+                     te_model_dict_inputs['outcome_name'],
+                     te_model_dict_inputs['treatment_name'],
+                     te_model_dict_inputs['ymodel'],
+                     te_model_dict_inputs['tmodel'],
+                     te_model_dict_inputs['n_data_splits'],
+                     te_model_dict_inputs['aux_dictionary'])
+
+            yhat = st.predict_continuous(te_model_dict_inputs['data_est'],
+                                     te_model_dict_inputs['split_name'],
+                                     te_model_dict_inputs['n_data_splits'],
+                                     te_model_dict_inputs['feature_name'],
+                                     te_model_dict_inputs['outcome_name'],
+                                      y_model
+                                     )
+            rsquared = r2_score( te_model_dict_inputs['data_est'][te_model_dict_inputs['outcome_name']], yhat)
+            return te['ATE TE'], te['ATE SE'], rsquared
+
+
+
+
         '''
         See CoefficientStability.ipynb for more details.
 
@@ -447,7 +478,7 @@ class diagnostics:
             R_dot = step1.rsquared
 
             ## 2. Estimate regression on W and observed. Remember to use cross-fitting to get the correct R2    
-            step2 = te_r2_output(te_model, te_model_dict_inputs,
+            step2 = diagnostics.coefstab.te_r2_output(te_model, te_model_dict_inputs,
                         y_model)    
             beta_tilde = step2[0]
             R_tilde = step2[2]
@@ -504,7 +535,7 @@ class diagnostics:
                     lasso_selection = LogisticRegressionCV(cv=5, random_state=27, penalty='l2', n_jobs=-1).fit(data_est[feature_name], data_est[y]) 
                     lasso_fit = LogisticRegression(C=lasso_selection.C_[0], penalty='l2', max_iter=200000).fit(data_est[feature_name], data_est[y])             
                 entry = pd.DataFrame(data={'type':n, 'features':feature_name, 'coef':lasso_fit.coef_.flatten()})
-                selection_coeff_names = selection_coeff_names.append(entry)
+                selection_coeff_names = pd.concat([selection_coeff_names, entry])
                 for x,b in zip(data_est[feature_name].columns, lasso_fit.coef_.flatten()):
                     if (b != 0) & (x!='const') & (x !='t'):
                         selected_lasso_features[n].append(x)
