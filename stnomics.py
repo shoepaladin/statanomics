@@ -385,7 +385,7 @@ class diagnostics:
                      te_model_dict_inputs['n_data_splits'],
                      te_model_dict_inputs['aux_dictionary'])
 
-            yhat = st.predict_continuous(te_model_dict_inputs['data_est'],
+            yhat = predict_continuous(te_model_dict_inputs['data_est'],
                                      te_model_dict_inputs['split_name'],
                                      te_model_dict_inputs['n_data_splits'],
                                      te_model_dict_inputs['feature_name'],
