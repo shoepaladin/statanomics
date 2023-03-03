@@ -392,7 +392,7 @@ class diagnostics:
                                      te_model_dict_inputs['outcome_name'],
                                       y_model
                                      )
-            rsquared = r2_score( te_model_dict_inputs['data_est'][te_model_dict_inputs['outcome_name']], yhat)
+            rsquared = metrics.r2_score( te_model_dict_inputs['data_est'][te_model_dict_inputs['outcome_name']], yhat)
             return te['ATE TE'], te['ATE SE'], rsquared
 
 
