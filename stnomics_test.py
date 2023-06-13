@@ -1147,7 +1147,8 @@ class hte:
 
                 ## Estimate standard errors on the test dataset
                 var_cov = np.array(  finalmodel_fit.cov_params()  )[ -1 * len(het_interactions) - 1:, -1 * len(het_interactions) - 1:]
-                output_se = np.sqrt( np.abs(np.dot( np.dot( test[[treatment_name] + het_interactions], var_cov), np.array(het_treatment_effects).astype(float) ) ))
+                input_var_X = np.dot( test[[treatment_name] + het_interactions], var_cov)
+                output_se = np.sqrt( np.abs(np.dot( input_var_X, np.array(het_treatment_effects).astype(float) ) ))
 
                 ## Estimate baseline
                 output_baseline = test[outcome_name] - test[treatment_name]*treatment_estimates
