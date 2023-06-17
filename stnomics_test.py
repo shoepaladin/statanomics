@@ -250,15 +250,20 @@ class secondstage:
                                                                                            'pvalue':finalmodel_fit.pvalues,
                                                                                            'N':finalmodel_fit.model.nobs
                                                                                           })    
-        return list(treatment_estimate), list(output_se), finalmodel_fit_coef
+        return list(treatment_estimate), list(output_se), finalmodel_fit_coef, finalmodel_fit
 
     def second_stage_no_interactions(approach, test_data, train_data, het_feature ):
         '''just like second_stage, but there are not interactions involved'''
         if approach=='OLS':
             ## Now run OLS regression on the test set.
             ## Predict the treatment assume all observations in the test set are treated.
+            valid_values = (pd.isna(train_data['y'])==False) &\
+                           (train_data['y'].isin([np.inf, -np.inf])==False)
+                
             X = sm.add_constant(train_data[het_feature])
-            finalmodel = sm.OLS(train_data['y'], X)
+            finalmodel = sm.OLS(train_data.loc[valid_values]['y'],
+                X.loc[valid_values] )
+            
             finalmodel_fit = finalmodel.fit()
             ## To estimate the individual treatment, assume that all observations are treated.
             X_test = sm.add_constant(test_data[het_feature])
@@ -268,9 +273,12 @@ class secondstage:
             ## Train lasso on the training dataset, and recover the selected features.
             ## As a default, keep the main treatment residual in the selected features.
             X = sm.add_constant(train_data[het_feature])            
-
-            lasso_selection = LassoCV(cv=5, random_state=27, n_jobs=-1).fit(X, train_data['y'])
+            valid_values = (pd.isna(train_data['y'])==False) &\
+                           (train_data['y'].isin([np.inf, -np.inf])==False)
+            
             lasso_max_iter = 1000
+            lasso_selection = LassoCV(cv=5, random_state=27, n_jobs=-1).fit(X.loc[valid_values],
+                                                                            train_data.loc[valid_values]['y'])
             lasso_fit = Lasso(alpha=lasso_selection.alpha_, max_iter=lasso_max_iter).fit(X, train_data['y']) 
             selected_lasso_features = []
             for x,b in zip(X.columns, lasso_fit.coef_):
@@ -281,13 +289,21 @@ class secondstage:
 
             ## Now run OLS regression on the test set.
             ## Predict the treatment assume all observations in the test set are treated.
-            X_test = sm.add_constant(test_data[selected_lasso_features])                    
-            finalmodel = sm.OLS(test_data['y'], X_test)
+            valid_values = (pd.isna(test_data['y'])==False) &\
+                           (test_data['y'].isin([np.inf, -np.inf])==False)
+            
+            X_test = sm.add_constant(test_data[selected_lasso_features])
+            finalmodel = sm.OLS(test_data.loc[valid_values]['y'], 
+                                X_test.loc[valid_values])
             finalmodel_fit = finalmodel.fit()
             treatment_estimate = finalmodel_fit.predict( X_test )
         elif approach=='Lasso':
             X = sm.add_constant(train_data[het_feature])            
-            lasso_fit = Lasso(alpha=lasso_alpha, max_iter=lasso_max_iter).fit(X, train_data['y'])            
+            valid_values = (pd.isna(train_data['y'])==False) &\
+                           (train_data['y'].isin([np.inf, -np.inf])==False)
+            
+            lasso_fit = Lasso(alpha=lasso_alpha, max_iter=lasso_max_iter).fit(X.loc[valid_values],
+                                                                              train_data.loc[valid_values]['y'])
             selected_lasso_features = []
             for x,b in zip(X.columns, lasso_fit.coef_):
                 if (b != 0) & (x!='const'):
@@ -297,8 +313,11 @@ class secondstage:
 
             ## Now run OLS regression on the test set.
             ## Predict the treatment assume all observations in the test set are treated.
+            valid_values = (pd.isna(test_data['y'])==False) &\
+                           (test_data['y'].isin([np.inf, -np.inf])==False)            
             X_test = sm.add_constant(test_data[selected_lasso_features])                    
-            finalmodel = sm.OLS(test_data['y'], X_test)
+            finalmodel = sm.OLS(test_data.loc[valid_values]['y'], 
+                                X_test.loc[valid_values])
             finalmodel_fit = finalmodel.fit()
             treatment_estimate = finalmodel_fit.predict( X_test )        
         else:
@@ -312,11 +331,8 @@ class secondstage:
 
         ## Output dataframe of final stage OLS results
         finalmodel_fit_coef = pd.DataFrame(index = finalmodel_fit.model.exog_names, data={'coef':finalmodel_fit.params, 
-                                                                                           'se':finalmodel_fit.bse,
-                                                                                           'pvalue':finalmodel_fit.pvalues,
-                                                                                           'N':finalmodel_fit.model.nobs
-                                                                                          })    
-        return list(treatment_estimate), list(output_se), finalmodel_fit_coef
+                                                                                  })    
+        return list(treatment_estimate), list(output_se), finalmodel_fit_coef, finalmodel_fit
 
     
 
@@ -1053,13 +1069,29 @@ class hte:
 
             ## Calculcate the counterfactual outcomes
             yhat_treat, yhat_control = predict_counterfactual_outcomes(data_est, 'splits', n_data_splits, feature_name, treatment_name, outcome_name,ymodel)
-
+            '''
+            NEW PORTION
+            '''
+            ## Residualize the outcomes:
+            y_control_residual = data_est[outcome_name] - yhat_control
+            y_treat_residual = data_est[outcome_name] - yhat_treat
+            ra_term = yhat_treat - yhat_control
+            
+            ipw_first = (data_est[treatment_name]==1)*(y_treat_residual) / that
+            ipw_second = (data_est[treatment_name]==0)*(y_control_residual)/ (1-that)
+            ipw_term = ipw_first - ipw_second
+            
+            pseudo_outcome = ra_term + ipw_term
+            
+            '''
+            OLD PORTION
             ra_portion = yhat_treat - yhat_control
             adj_treatment = (data_est[treatment_name]==1)*(data_est[outcome_name] - yhat_treat)/that
             adj_control = (data_est[treatment_name]==0)*(data_est[outcome_name] - yhat_control)/(1-that)
 
             pseudo_outcome = ra_portion - adj_treatment + adj_control
-
+            '''
+            
             output_baseline_hat = yhat_control[:]
 
             if (aux_dictionary['force_second_stage']==None):
@@ -1076,6 +1108,15 @@ class hte:
                 data_for_2nd_stage['y'] = pseudo_outcome[:]
                 data_for_2nd_stage['t'] = data_est[treatment_name].copy()
 
+                data_for_2nd_stage['t_hat'] = that[:]
+                
+#                 data_for_2nd_stage = data_for_2nd_stage.loc[data_for_2nd_stage['t_hat'].between(
+#                     aux_dictionary['lower'], aux_dictionary['upper'])]                
+#                 data_for_2nd_stage = data_for_2nd_stage.loc[
+#                         (pd.isna(data_for_2nd_stage['y'])==False) &
+#                     (data_for_2nd_stage['y'].isin([np.inf, -np.inf])==False ) ]
+                
+                
                 data_for_2nd_stage['half'] = 0
                 half = np.int(len(data_for_2nd_stage) / 2)
                 data_for_2nd_stage.loc[data_for_2nd_stage.iloc[-half:].index, 'half' ] = 1
@@ -1087,16 +1128,19 @@ class hte:
                                '1': data_for_2nd_stage.loc[data_for_2nd_stage['half']==1]}            
                 output_treatment_estimate = []
                 output_se_hat = []        
+                output_result_pd = []
                 for test_i,train_i in zip(['0','1'], ['1','0']):            
                     test_data = data_est_half[test_i]
                     train_data = data_est_half[train_i]
-                    treatment_estimate,se_estimate, coef_pd = secondstage.second_stage_no_interactions(approach, test_data, train_data, het_feature )                    
+                    treatment_estimate,se_estimate, coef_pd, result_pd = secondstage.second_stage_no_interactions(approach, test_data, train_data, het_feature )                    
                     output_treatment_estimate.extend(list(treatment_estimate))            
                     output_se_hat.extend(list(se_estimate))            
+                    output_result_pd.append(result_pd)
                     ols_coef_pd[test_i] = coef_pd.copy()
 
-                other_output = {'coefficients':ols_coef_pd}
-
+                other_output = {'coefficients':ols_coef_pd,
+                               'finalmodel':output_result_pd}
+    #                             'Outcome prediction metric':y_r2}
 
             ## Output the treatment estimate and propensity scores
             return output_treatment_estimate, output_se_hat, that, output_baseline_hat, other_output    
