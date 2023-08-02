@@ -1033,7 +1033,7 @@ class ate:
                 var_hat += add_to
             SE_ATT = np.sqrt(var_hat) /np.sqrt(len(data_est))
 
-            return {'ATE TE':np.mean(treatment_estimate), 'ATE SE': SE,         'ATT TE':np.mean(treatment_estimate_att), 'ATT SE': SE_ATT, 'PScore':that}
+            return {'ATE TE':np.mean(treatment_estimate), 'ATE SE': SE,         'ATT TE':np.mean(treatment_estimate_att), 'ATT SE': SE_ATT, 'PScore':that, "treatment_estimate":treatment_estimate}
 
 
 # %%

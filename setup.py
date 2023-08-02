@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='stnomics',
-    version='0.1.03',
+    version='0.1.031',
     url='https://github.com/shoepaladin/statanomics/',
     author='Julian Hsu',
     description='Installation of the Statanomics package. Thank you for using!',
