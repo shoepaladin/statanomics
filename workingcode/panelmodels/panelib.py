@@ -352,9 +352,9 @@ class sdid:
         ## This estimate treatment-unit specific treatment effects
         treated_units = data.loc[data[data_dict['treatment']]==1][data_dict['unitid']].unique().tolist()
         treated_na_replace = dict(zip(treated_units, [np.nan]*(len(treated_units))))
-        t_fe = pd.get_dummies(data[data_dict['date']]  ,drop_first=True)
+        t_fe = pd.get_dummies(data[data_dict['date']]  ,drop_first=True).astype(float)
         x_fe = pd.get_dummies(data[data_dict['unitid']].replace(to_replace=treated_na_replace),
-                              drop_first=True, dummy_na=False)
+                              drop_first=True, dummy_na=False).astype(float)
 
         ## Estimate a single ATET
         ## so construct a single indicator 
@@ -586,7 +586,7 @@ class sc:
             
         elif model_name=='di':
             print('Using DI')
-            w=alpha_lambda.get_alpha_lambda(sc_dict['C_pre'])
+            w=alpha_lambda.get_alpha_lambda(pre_process_data['C_pre'])
             alpha_lambda_to_use = alpha_lambda.alpha_lambda_transform(w.x)
             ## Take the alpha and lambda values, and estimate mu and omega
             sc_est = di.predict_mu_omega(pre_process_data['T_pre'], 
