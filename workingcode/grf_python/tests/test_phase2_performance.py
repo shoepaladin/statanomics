@@ -218,6 +218,118 @@ class TestParallelTreeBuilding:
 
 
 # ---------------------------------------------------------------------------
+# P2.4b  Auto n_jobs selection
+# ---------------------------------------------------------------------------
+
+class TestAutoNJobs:
+
+    def test_auto_selects_sequential_for_tiny_data(self):
+        """
+        Very small n, small p, few trees → auto should return sequential (1).
+        work_units = n_trees × n_sub × mtry × q
+        With n=100, p=3, n_trees=10: ~10 × 50 × 1 × 3 = 1,500 << 400,000
+        """
+        rng = np.random.default_rng(0)
+        # Build a minimal fitted-ish forest to set n and n_features_in_
+        forest = NumbaCausalForest(
+            n_trees=10, subsample_ratio=0.5, min_leaf_size=5,
+            honesty_fraction=0.5, n_quantiles=10,
+            n_jobs='auto', random_state=0
+        )
+        forest.n = 100
+        forest.n_features_in_ = 3
+        result = forest._effective_n_jobs()
+        assert result == 1, (
+            f"Expected sequential for tiny data, got n_jobs={result}"
+        )
+
+    def test_auto_selects_parallel_for_large_data(self):
+        """
+        Large n, many features, many trees → auto should pick parallel (>1).
+        With n=2000, p=40, n_trees=100:
+          n_sub=1000, mtry=14, q=20 → units=100×1000×14×20=28M >> 400,000
+        """
+        import os
+        if (os.cpu_count() or 1) < 2:
+            pytest.skip("Need at least 2 CPUs for parallel test")
+        forest = NumbaCausalForest(
+            n_trees=100, subsample_ratio=0.5, min_leaf_size=10,
+            honesty_fraction=0.5, n_quantiles=20,
+            n_jobs='auto', random_state=0
+        )
+        forest.n = 2000
+        forest.n_features_in_ = 40
+        result = forest._effective_n_jobs()
+        assert result > 1, (
+            f"Expected parallel for large data, got n_jobs={result}"
+        )
+
+    def test_auto_boundary_n_trees(self):
+        """
+        n=500, p=5: sequential below ~500 trees, parallel above.
+        Threshold: n_trees × 250 × 2 × 12 = n_trees × 6,000 >= 400,000
+                   → n_trees >= 67
+        """
+        forest_lo = NumbaCausalForest(
+            n_trees=10, subsample_ratio=0.5, min_leaf_size=5,
+            honesty_fraction=0.5, n_quantiles=20,
+            n_jobs='auto', random_state=0
+        )
+        forest_lo.n = 500
+        forest_lo.n_features_in_ = 5
+
+        forest_hi = NumbaCausalForest(
+            n_trees=500, subsample_ratio=0.5, min_leaf_size=5,
+            honesty_fraction=0.5, n_quantiles=20,
+            n_jobs='auto', random_state=0
+        )
+        forest_hi.n = 500
+        forest_hi.n_features_in_ = 5
+
+        jobs_lo = forest_lo._effective_n_jobs()
+        jobs_hi = forest_hi._effective_n_jobs()
+
+        assert jobs_lo == 1, (
+            f"Small forest on small data should be sequential, got {jobs_lo}"
+        )
+        # Only assert parallel if we actually have CPUs
+        import os
+        if (os.cpu_count() or 1) >= 2:
+            assert jobs_hi > 1, (
+                f"500 trees on n=500 should trigger parallel, got {jobs_hi}"
+            )
+
+    def test_auto_produces_valid_predictions(self, small_data):
+        """
+        auto mode end-to-end: fit and predict should work and match n_jobs=1.
+        """
+        X, Y, W, _ = small_data
+        common = dict(n_trees=20, max_depth=4, min_leaf_size=5,
+                      n_folds=2, n_quantiles=5, random_state=0)
+        f_seq = NumbaCausalForest(**common, n_jobs=1).fit(X, Y, W)
+        f_auto = NumbaCausalForest(**common, n_jobs='auto').fit(X, Y, W)
+        tau_seq = f_seq.predict(X[:30])
+        tau_auto = f_auto.predict(X[:30])
+        # Both must be finite
+        assert np.all(np.isfinite(tau_seq))
+        assert np.all(np.isfinite(tau_auto))
+        # Results should be highly correlated (same random_state)
+        corr = np.corrcoef(tau_seq, tau_auto)[0, 1]
+        assert corr > 0.95, f"auto vs seq corr={corr:.3f}, expected >0.95"
+
+    def test_explicit_n_jobs_integer_unchanged(self, small_data):
+        """n_jobs=2 (explicit int) should not be overridden by auto logic."""
+        X, Y, W, _ = small_data
+        forest = NumbaCausalForest(
+            n_trees=10, max_depth=3, min_leaf_size=5,
+            n_folds=2, n_jobs=2, random_state=0
+        )
+        forest.n = len(X)
+        forest.n_features_in_ = X.shape[1]
+        assert forest._effective_n_jobs() == 2
+
+
+# ---------------------------------------------------------------------------
 # P2.5  Batch prediction via JIT tree traversal
 # ---------------------------------------------------------------------------
 
