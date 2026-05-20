@@ -33,9 +33,12 @@ class NumbaCausalForest:
     min_leaf_size : int
     max_depth : int
     mtry : int or None
-        Features considered per split.  None → ceil(sqrt(p)).
+        Features considered per split.  None → ceil(p/3), matching R grf
+        default (outperforms ceil(sqrt(p)) for causal forests).
     n_quantiles : int
-        Candidate split thresholds per feature (default 20, was 3).
+        Maximum candidate split thresholds per feature (default 20).
+        Actual count is capped at min(n_quantiles, split_sample // 10)
+        so it scales with available data.
     n_folds : int
         Cross-fitting folds for nuisance estimation (default 5, was 2).
     honesty_fraction : float

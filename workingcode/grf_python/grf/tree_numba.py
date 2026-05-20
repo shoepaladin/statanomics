@@ -63,11 +63,18 @@ class NumbaCausalTree:
         self._rng = rng if rng is not None else np.random.default_rng()
 
         n_features = X.shape[1]
+        # R grf default is ceil(p/3), which outperforms ceil(sqrt(p)) for
+        # causal forests — sqrt(p) over-restricts when p is moderate.
         self._mtry = (self.mtry if self.mtry is not None
-                      else max(1, math.ceil(math.sqrt(n_features))))
+                      else max(1, math.ceil(n_features / 3)))
 
-        # Dense percentile grid — was [25, 50, 75], now configurable
-        self._percentiles = np.linspace(5.0, 95.0, self.n_quantiles)
+        # Adaptive quantile grid: denser grids help when the split sample is
+        # large, but thin out past ~1 obs/bin (which adds noise, not signal).
+        # Cap at min(n_quantiles, split_sample_size // 10) so we never try
+        # more thresholds than the data can support.
+        n_split = len(split_idx)
+        effective_q = max(3, min(self.n_quantiles, n_split // 10))
+        self._percentiles = np.linspace(5.0, 95.0, effective_q)
 
         # Per-feature importance accumulated during tree building
         self.feature_importances_ = np.zeros(n_features)

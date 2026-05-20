@@ -20,8 +20,8 @@ from tests.conftest import make_data
 
 class TestMtry:
 
-    def test_mtry_default_is_sqrt_p(self, small_data):
-        """Default mtry should be ceil(sqrt(p))."""
+    def test_mtry_default_is_p_over_3(self, small_data):
+        """Default mtry should be ceil(p/3), matching R grf default."""
         X, Y, W, _ = small_data
         p = X.shape[1]
         forest = NumbaCausalForest(
@@ -29,7 +29,7 @@ class TestMtry:
             verbose=0, random_state=0
         )
         forest.fit(X, Y, W)
-        expected = max(1, math.ceil(math.sqrt(p)))
+        expected = max(1, math.ceil(p / 3))
         assert forest.trees[0]._mtry == expected
 
     def test_mtry_1_limits_features_per_split(self, small_data):
@@ -180,13 +180,18 @@ class TestNuisanceCrossFitting:
 
 class TestSplitThresholds:
 
-    def test_n_quantiles_parameter_stored(self, small_data):
+    def test_n_quantiles_parameter_is_adaptive(self, small_data):
+        """Effective quantile count is capped at min(n_quantiles, split_n//10)."""
         X, Y, W, _ = small_data
+        # With small_data n=300, subsample_ratio=0.5 → ~150 subsample,
+        # honesty_fraction=0.5 → ~75 split samples → cap = 75//10 = 7
         for q in (5, 10, 20):
             f = NumbaCausalForest(n_trees=3, n_quantiles=q, max_depth=3,
                                   min_leaf_size=5, verbose=0, random_state=0)
             f.fit(X, Y, W)
-            assert f.trees[0]._percentiles.shape[0] == q
+            actual_q = f.trees[0]._percentiles.shape[0]
+            assert actual_q <= q  # never exceeds requested
+            assert actual_q >= 3  # never drops below minimum
 
     def test_more_quantiles_finds_step_function_split(self):
         """
