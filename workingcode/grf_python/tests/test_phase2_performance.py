@@ -225,35 +225,31 @@ class TestAutoNJobs:
 
     def test_auto_selects_sequential_for_tiny_data(self):
         """
-        Very small n, small p, few trees → auto should return sequential (1).
-        work_units = n_trees × n_sub × mtry × q
-        With n=100, p=3, n_trees=10: ~10 × 50 × 1 × 3 = 1,500 << 400,000
+        Small n, small p, few trees → auto should stay sequential.
+        n=500, p=5, n_trees=100: n_sub=250, mtry=2, q=12 → 600k < 1_000_000
         """
-        rng = np.random.default_rng(0)
-        # Build a minimal fitted-ish forest to set n and n_features_in_
         forest = NumbaCausalForest(
-            n_trees=10, subsample_ratio=0.5, min_leaf_size=5,
-            honesty_fraction=0.5, n_quantiles=10,
+            n_trees=100, subsample_ratio=0.5, min_leaf_size=5,
+            honesty_fraction=0.5, n_quantiles=20,
             n_jobs='auto', random_state=0
         )
-        forest.n = 100
-        forest.n_features_in_ = 3
+        forest.n = 500
+        forest.n_features_in_ = 5
         result = forest._effective_n_jobs()
         assert result == 1, (
-            f"Expected sequential for tiny data, got n_jobs={result}"
+            f"Expected sequential for 600k work units, got n_jobs={result}"
         )
 
     def test_auto_selects_parallel_for_large_data(self):
         """
         Large n, many features, many trees → auto should pick parallel (>1).
-        With n=2000, p=40, n_trees=100:
-          n_sub=1000, mtry=14, q=20 → units=100×1000×14×20=28M >> 400,000
+        n=2000, p=40, n_trees=20: n_sub=1000, mtry=14, q=20 → 5.6M >> 1_000_000
         """
         import os
         if (os.cpu_count() or 1) < 2:
             pytest.skip("Need at least 2 CPUs for parallel test")
         forest = NumbaCausalForest(
-            n_trees=100, subsample_ratio=0.5, min_leaf_size=10,
+            n_trees=20, subsample_ratio=0.5, min_leaf_size=10,
             honesty_fraction=0.5, n_quantiles=20,
             n_jobs='auto', random_state=0
         )
@@ -261,42 +257,42 @@ class TestAutoNJobs:
         forest.n_features_in_ = 40
         result = forest._effective_n_jobs()
         assert result > 1, (
-            f"Expected parallel for large data, got n_jobs={result}"
+            f"Expected parallel for 5.6M work units, got n_jobs={result}"
         )
 
     def test_auto_boundary_n_trees(self):
         """
-        n=500, p=5: sequential below ~500 trees, parallel above.
-        Threshold: n_trees × 250 × 2 × 12 = n_trees × 6,000 >= 400,000
-                   → n_trees >= 67
+        n=1000, p=10: crosses the 1M threshold around n_trees=30.
+        units = n_trees × 500 × 4 × 20 = n_trees × 40_000
+        → n_trees=20 → 800k < 1M  (sequential)
+        → n_trees=50 → 2M > 1M    (parallel)
         """
         forest_lo = NumbaCausalForest(
-            n_trees=10, subsample_ratio=0.5, min_leaf_size=5,
+            n_trees=20, subsample_ratio=0.5, min_leaf_size=5,
             honesty_fraction=0.5, n_quantiles=20,
             n_jobs='auto', random_state=0
         )
-        forest_lo.n = 500
-        forest_lo.n_features_in_ = 5
+        forest_lo.n = 1000
+        forest_lo.n_features_in_ = 10
 
         forest_hi = NumbaCausalForest(
-            n_trees=500, subsample_ratio=0.5, min_leaf_size=5,
+            n_trees=50, subsample_ratio=0.5, min_leaf_size=5,
             honesty_fraction=0.5, n_quantiles=20,
             n_jobs='auto', random_state=0
         )
-        forest_hi.n = 500
-        forest_hi.n_features_in_ = 5
+        forest_hi.n = 1000
+        forest_hi.n_features_in_ = 10
 
         jobs_lo = forest_lo._effective_n_jobs()
         jobs_hi = forest_hi._effective_n_jobs()
 
         assert jobs_lo == 1, (
-            f"Small forest on small data should be sequential, got {jobs_lo}"
+            f"800k work units should be sequential, got {jobs_lo}"
         )
-        # Only assert parallel if we actually have CPUs
         import os
         if (os.cpu_count() or 1) >= 2:
             assert jobs_hi > 1, (
-                f"500 trees on n=500 should trigger parallel, got {jobs_hi}"
+                f"2M work units should trigger parallel, got {jobs_hi}"
             )
 
     def test_auto_produces_valid_predictions(self, small_data):

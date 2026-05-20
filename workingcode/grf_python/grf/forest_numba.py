@@ -71,7 +71,7 @@ class NumbaCausalForest:
         -1 = use all available CPUs (loky backend).
         'auto' = automatically decide based on estimated per-tree work
                  (default). Parallelizes when n_trees × n_sub × mtry × q
-                 exceeds ~400_000 units, the empirical break-even point
+                 exceeds ~1_000_000 units, the empirical break-even point
                  where loky startup overhead is justified.
     verbose : int
         0 = silent, 1 = progress.
@@ -134,19 +134,21 @@ class NumbaCausalForest:
         """
         Resolve n_jobs to an integer, applying auto-detection when n_jobs='auto'.
 
-        Auto-detection rule (derived from grid benchmarks over n, p, n_trees):
+        Auto-detection rule (derived from tree-building-only benchmarks isolating
+        loky process overhead from nuisance RF estimation):
 
-        Per-tree work scales with:  n_sub × mtry × effective_q
-        loky startup overhead is ~0.3s (cold, amortized across n_trees).
+        Per-tree work metric:  n_trees × n_sub × mtry × effective_q
 
-        Break-even condition empirically calibrated from benchmarks:
-          n_trees × n_sub × mtry × effective_q > 400_000
+        Empirical break-even (tree-build time ≥ loky startup overhead):
+          work_units < 1_000_000  → sequential  (loky overhead > savings)
+          work_units ≥ 1_000_000  → parallel    (1.2–2.3× speedup)
 
-        This threshold means:
-          - n=500, p=5,  n_trees=50:   ~150k  → sequential  (marginal 1.2× gain)
-          - n=500, p=5,  n_trees=500:  ~1.5M  → parallel    (startup amortized)
-          - n=1000, p=20, n_trees=100: ~3.5M  → parallel
-          - n=2000, p=40, n_trees=50:  ~7M    → parallel    (2.8× speedup)
+        Representative calibration points:
+          n=500,  p=5,  n_trees=100:  600k  → sequential (0.88× with 2 jobs)
+          n=800,  p=10, n_trees=50:  1600k  → parallel   (1.17× with 2 jobs)
+          n=1000, p=10, n_trees=30:  1200k  → parallel   (1.21× with 2 jobs)
+          n=1000, p=20, n_trees=50:  3500k  → parallel   (1.44× with 2 jobs)
+          n=2000, p=40, n_trees=20:  5600k  → parallel   (1.66× with 2 jobs)
         """
         if self.n_jobs != 'auto':
             return self.n_jobs
@@ -162,7 +164,7 @@ class NumbaCausalForest:
         q_est = max(3, min(self.n_quantiles, split_n // 10))
 
         work_units = self.n_trees * n_sub * mtry_est * q_est
-        if work_units >= 400_000:
+        if work_units >= 1_000_000:
             return min(n_cpu, 4)
         return 1
 
