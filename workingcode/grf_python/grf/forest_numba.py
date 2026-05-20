@@ -1,195 +1,341 @@
 """
-Numba-optimized causal forest (Phase 1).
+Numba-optimized causal forest with all Phase 1/2/3 improvements.
 """
 
+import logging
+import math
 import numpy as np
 from scipy.stats import norm
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import KFold
+from joblib import Parallel, delayed
+
 from .tree_numba import NumbaCausalTree
 from .numba_core import (
     estimate_tau_ols_numba,
-    compute_tree_weights_numba,
-    weighted_ols_prediction,
-    compute_ij_variance_numba
+    traverse_tree_batch,
+    batch_predict_from_leaves,
+    compute_ij_variance,
+    compute_variance_from_tree_preds,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class NumbaCausalForest:
     """
-    Phase 1: Numba-optimized causal forest.
-    
-    Expected speedup: 2-4x over pure Python
-    
-    Key optimizations:
-    - JIT-compiled split finding
-    - Parallel feature search
-    - Fast weight computation
-    - Vectorized predictions
+    Numba-optimized causal forest.
+
+    Parameters
+    ----------
+    n_trees : int
+    subsample_ratio : float
+    min_leaf_size : int
+    max_depth : int
+    mtry : int or None
+        Features considered per split.  None → ceil(sqrt(p)).
+    n_quantiles : int
+        Candidate split thresholds per feature (default 20, was 3).
+    n_folds : int
+        Cross-fitting folds for nuisance estimation (default 5, was 2).
+    honesty_fraction : float
+        Fraction of subsample used for determining splits (default 0.5).
+    use_parallel : bool
+        Parallel feature search within each tree.
+    n_jobs : int
+        Parallel tree building threads (1 = sequential).
+    verbose : int
+        0 = silent, 1 = progress.
+    random_state : int or None
     """
-    
+
     def __init__(self, n_trees=100, subsample_ratio=0.5,
                  min_leaf_size=10, max_depth=10,
-                 use_parallel=True, random_state=None):
+                 mtry=None, n_quantiles=20,
+                 n_folds=5, honesty_fraction=0.5,
+                 use_parallel=True, n_jobs=1,
+                 verbose=0, random_state=None):
         self.n_trees = n_trees
         self.subsample_ratio = subsample_ratio
         self.min_leaf_size = min_leaf_size
         self.max_depth = max_depth
+        self.mtry = mtry
+        self.n_quantiles = n_quantiles
+        self.n_folds = n_folds
+        self.honesty_fraction = honesty_fraction
         self.use_parallel = use_parallel
+        self.n_jobs = n_jobs
+        self.verbose = verbose
         self.random_state = random_state
-        
-        if random_state is not None:
-            np.random.seed(random_state)
-    
+        # Instance RNG — does NOT mutate global numpy state
+        self._rng = np.random.default_rng(random_state)
+
+    # ------------------------------------------------------------------
+    # sklearn compatibility
+    # ------------------------------------------------------------------
+
+    def get_params(self, deep=True):
+        return dict(
+            n_trees=self.n_trees,
+            subsample_ratio=self.subsample_ratio,
+            min_leaf_size=self.min_leaf_size,
+            max_depth=self.max_depth,
+            mtry=self.mtry,
+            n_quantiles=self.n_quantiles,
+            n_folds=self.n_folds,
+            honesty_fraction=self.honesty_fraction,
+            use_parallel=self.use_parallel,
+            n_jobs=self.n_jobs,
+            verbose=self.verbose,
+            random_state=self.random_state,
+        )
+
+    def set_params(self, **params):
+        for k, v in params.items():
+            setattr(self, k, v)
+        if 'random_state' in params:
+            self._rng = np.random.default_rng(params['random_state'])
+        return self
+
+    # ------------------------------------------------------------------
+    # Fitting
+    # ------------------------------------------------------------------
+
     def fit(self, X, Y, W):
-        """Fit forest with orthogonalization."""
-        self.X_train = X
-        self.Y_train = Y
-        self.W_train = W
+        """Fit causal forest with orthogonalization."""
+        self._validate_inputs(X, Y, W)
+        self.X_train = np.ascontiguousarray(X, dtype=np.float64)
+        self.Y_train = np.ascontiguousarray(Y, dtype=np.float64)
+        self.W_train = np.ascontiguousarray(W, dtype=np.float64)
         self.n = len(X)
-        
-        # Step 1: Orthogonalization
-        print("Step 1/2: Orthogonalization (cross-fitted nuisance estimation)...")
-        Y_hat, W_hat = self._estimate_nuisance(X, Y, W)
-        
-        self.Y_resid = Y - Y_hat
-        self.W_resid = W - W_hat
-        
-        # Step 2: Build forest
-        print(f"Step 2/2: Growing {self.n_trees} trees (Numba-accelerated)...")
-        self.trees = []
-        
-        for i in range(self.n_trees):
-            if (i + 1) % 20 == 0:
-                print(f"  Tree {i+1}/{self.n_trees}")
-            
-            # Subsample
-            n_sub = int(self.subsample_ratio * self.n)
-            idx = np.random.choice(self.n, n_sub, replace=False)
-            np.random.shuffle(idx)
-            
-            # Honest split
-            mid = len(idx) // 2
+        self.n_features_in_ = X.shape[1]
+
+        if self.verbose >= 1:
+            logger.info("Step 1/2: Cross-fitted nuisance estimation (%d folds)...",
+                        self.n_folds)
+
+        Y_hat, W_hat = self._estimate_nuisance(
+            self.X_train, self.Y_train, self.W_train
+        )
+        self.Y_resid = self.Y_train - Y_hat
+        self.W_resid = self.W_train - W_hat
+
+        if self.verbose >= 1:
+            logger.info("Step 2/2: Growing %d trees...", self.n_trees)
+
+        subsamples = self._draw_subsamples()
+
+        if self.n_jobs != 1:
+            self.trees = Parallel(n_jobs=self.n_jobs, backend='threading')(
+                delayed(self._build_single_tree)(split_idx, est_idx, seed)
+                for split_idx, est_idx, seed in subsamples
+            )
+        else:
+            self.trees = [
+                self._build_single_tree(split_idx, est_idx, seed)
+                for split_idx, est_idx, seed in subsamples
+            ]
+
+        # Aggregate feature importances across all trees
+        self.feature_importances_ = np.mean(
+            [t.feature_importances_ for t in self.trees], axis=0
+        )
+
+        if self.verbose >= 1:
+            logger.info("Fit complete.")
+
+        return self
+
+    def _validate_inputs(self, X, Y, W):
+        if X.ndim != 2:
+            raise ValueError(f"X must be 2-D, got shape {X.shape}")
+        n = X.shape[0]
+        if len(Y) != n:
+            raise ValueError(f"Y length {len(Y)} != X rows {n}")
+        if len(W) != n:
+            raise ValueError(f"W length {len(W)} != X rows {n}")
+        if np.any(~np.isfinite(X)):
+            raise ValueError("X contains NaN or Inf")
+        if np.any(~np.isfinite(Y)):
+            raise ValueError("Y contains NaN or Inf")
+        if np.any(~np.isfinite(W)):
+            raise ValueError("W contains NaN or Inf")
+
+    def _draw_subsamples(self):
+        """
+        Generate (split_idx, est_idx, seed) for each tree.
+        Uses instance RNG so global numpy state is not mutated.
+        """
+        n_sub = max(2 * self.min_leaf_size * 2,
+                    int(self.subsample_ratio * self.n))
+        self._subsample_size = n_sub  # stored for IJ variance formula
+        subsamples = []
+        for _ in range(self.n_trees):
+            idx = self._rng.choice(self.n, n_sub, replace=False)
+            mid = max(1, int(self.honesty_fraction * len(idx)))
             split_idx = idx[:mid]
             est_idx = idx[mid:]
-            
-            tree = NumbaCausalTree(
-                self.min_leaf_size,
-                self.max_depth,
-                self.use_parallel
-            )
-            tree.fit(X, self.Y_resid, self.W_resid, split_idx, est_idx)
-            self.trees.append(tree)
-        
-        print("✓ Fit complete")
-        return self
-    
+            seed = int(self._rng.integers(0, 2**31))
+            subsamples.append((split_idx, est_idx, seed))
+        return subsamples
+
+    def _build_single_tree(self, split_idx, est_idx, seed):
+        tree = NumbaCausalTree(
+            min_leaf_size=self.min_leaf_size,
+            max_depth=self.max_depth,
+            mtry=self.mtry,
+            n_quantiles=self.n_quantiles,
+            use_parallel=self.use_parallel,
+        )
+        tree.fit(
+            self.X_train, self.Y_resid, self.W_resid,
+            split_idx, est_idx,
+            rng=np.random.default_rng(seed)
+        )
+        return tree
+
     def _estimate_nuisance(self, X, Y, W):
-        """Cross-fitted nuisance function estimation."""
+        """
+        Cross-fitted nuisance estimation.
+
+        FIX: shuffles data before folding (was order-dependent),
+             uses n_folds KFold (was always 2-fold with no shuffle).
+        """
         n = len(X)
         Y_hat = np.zeros(n)
         W_hat = np.zeros(n)
-        
-        # 2-fold cross-fitting
-        n_half = n // 2
-        idx1 = np.arange(n_half)
-        idx2 = np.arange(n_half, n)
-        
-        # Fold 1
-        rf_Y_1 = RandomForestRegressor(n_estimators=50, max_depth=10, n_jobs=-1)
-        rf_W_1 = RandomForestRegressor(n_estimators=50, max_depth=10, n_jobs=-1)
-        rf_Y_1.fit(X[idx1], Y[idx1])
-        rf_W_1.fit(X[idx1], W[idx1])
-        Y_hat[idx2] = rf_Y_1.predict(X[idx2])
-        W_hat[idx2] = rf_W_1.predict(X[idx2])
-        
-        # Fold 2
-        rf_Y_2 = RandomForestRegressor(n_estimators=50, max_depth=10, n_jobs=-1)
-        rf_W_2 = RandomForestRegressor(n_estimators=50, max_depth=10, n_jobs=-1)
-        rf_Y_2.fit(X[idx2], Y[idx2])
-        rf_W_2.fit(X[idx2], W[idx2])
-        Y_hat[idx1] = rf_Y_2.predict(X[idx1])
-        W_hat[idx1] = rf_W_2.predict(X[idx1])
-        
+
+        kf = KFold(n_splits=self.n_folds, shuffle=True,
+                   random_state=int(self._rng.integers(0, 2**31)))
+        rf_params = {'n_estimators': 100, 'max_depth': 10, 'n_jobs': -1,
+                     'random_state': 0}
+
+        for train_idx, val_idx in kf.split(X):
+            rf_Y = RandomForestRegressor(**rf_params)
+            rf_W = RandomForestRegressor(**rf_params)
+            rf_Y.fit(X[train_idx], Y[train_idx])
+            rf_W.fit(X[train_idx], W[train_idx])
+            Y_hat[val_idx] = rf_Y.predict(X[val_idx])
+            W_hat[val_idx] = rf_W.predict(X[val_idx])
+
         return Y_hat, W_hat
-    
+
+    # ------------------------------------------------------------------
+    # Prediction
+    # ------------------------------------------------------------------
+
     def predict(self, X, return_std=False):
-        """Fast prediction with optional inference."""
+        """
+        Predict CATEs.
+
+        Uses batch JIT-compiled tree traversal instead of per-point
+        Python while-loops, and per-tree variance for inference.
+        """
+        if not hasattr(self, 'trees'):
+            raise RuntimeError("Call fit() before predict()")
+        if X.shape[1] != self.n_features_in_:
+            raise ValueError(
+                f"X has {X.shape[1]} features, expected {self.n_features_in_}"
+            )
+
+        X = np.ascontiguousarray(X, dtype=np.float64)
         n_test = len(X)
-        
-        if not return_std:
-            # Fast path: simple averaging
-            preds = np.zeros(n_test)
-            for x_i in range(n_test):
-                tree_preds = []
-                for tree in self.trees:
-                    idx = tree.get_leaf_indices(X[x_i])
-                    tau = estimate_tau_ols_numba(
-                        self.Y_resid, self.W_resid, idx
-                    )
-                    tree_preds.append(tau)
-                preds[x_i] = np.mean(tree_preds)
-            return preds
-        
-        # Inference path: compute weights
-        print("Computing forest weights...")
-        
-        # Pack leaf indices for Numba
-        max_leaf_size = self.n // 2
-        tree_weights_list = []
-        
+
+        # Collect per-tree predictions using batch JIT traversal
+        tree_preds = np.zeros((self.n_trees, n_test))
+
         for b, tree in enumerate(self.trees):
-            leaf_indices = -np.ones((n_test, max_leaf_size), dtype=np.int32)
-            leaf_sizes = np.zeros(n_test, dtype=np.int32)
-            
-            for i in range(n_test):
-                idx = tree.get_leaf_indices(X[i])
-                n_leaf = min(len(idx), max_leaf_size)
-                leaf_indices[i, :n_leaf] = idx[:n_leaf]
-                leaf_sizes[i] = n_leaf
-            
-            # Compute weights for this tree (Numba)
-            weights_b = compute_tree_weights_numba(
-                leaf_indices, leaf_sizes, self.n
+            feats, threshs, left_ch, right_ch, starts, sizes, flat_idx = \
+                tree.to_arrays()
+
+            # Determine the max leaf size for this tree (avoids over-allocation)
+            max_leaf = int(sizes.max()) if sizes.max() > 0 else 1
+
+            leaf_indices, leaf_sizes = traverse_tree_batch(
+                X, feats, threshs, left_ch, right_ch,
+                starts, sizes, flat_idx, max_leaf
             )
-            tree_weights_list.append(weights_b)
-        
-        # Stack and average
-        tree_weights = np.array(tree_weights_list)  # (n_trees, n_test, n_train)
-        avg_weights = np.mean(tree_weights, axis=0)
-        
-        # Weighted predictions
-        print("Computing weighted predictions...")
-        tau_hat = np.zeros(n_test)
-        for i in range(n_test):
-            tau_hat[i] = weighted_ols_prediction(
-                self.Y_resid, self.W_resid, avg_weights[i]
+
+            tree_preds[b] = batch_predict_from_leaves(
+                self.Y_resid, self.W_resid, leaf_indices, leaf_sizes
             )
-        
-        # IJ variance
-        print("Computing IJ variance...")
-        W_c = self.W_resid - np.mean(self.W_resid)
-        Y_c = self.Y_resid - np.mean(self.Y_resid)
-        psi = W_c * Y_c
-        
-        variances = compute_ij_variance_numba(tree_weights, avg_weights, psi)
-        std = np.sqrt(variances)
-        
+
+        tau_hat = np.mean(tree_preds, axis=0)
+
+        if not return_std:
+            return tau_hat
+
+        # Build (n_trees, n_train) subsample membership matrix for IJ
+        subsample_flags = np.array(
+            [t.in_subsample_ for t in self.trees], dtype=bool
+        )
+        variances = compute_ij_variance(
+            tree_preds, subsample_flags,
+            self._subsample_size, self.n
+        )
+        std = np.sqrt(np.maximum(variances, 0.0))
         return tau_hat, std
-    
+
     def predict_interval(self, X, alpha=0.05):
-        """Predict with confidence intervals."""
         tau, std = self.predict(X, return_std=True)
-        z = norm.ppf(1 - alpha/2)
-        lower = tau - z * std
-        upper = tau + z * std
-        return tau, lower, upper
-    
+        z = norm.ppf(1 - alpha / 2)
+        return tau, tau - z * std, tau + z * std
+
+    # ------------------------------------------------------------------
+    # OOB predictions
+    # ------------------------------------------------------------------
+
+    def oob_predict(self):
+        """
+        Out-of-bag CATE predictions for all training points.
+
+        Each training point is predicted using only trees that did NOT
+        include it in their subsample, so there is no train/test leakage.
+
+        Returns
+        -------
+        oob_tau : float array (n,)
+            NaN for any point that was in-sample for every tree.
+        """
+        if not hasattr(self, 'trees'):
+            raise RuntimeError("Call fit() before oob_predict()")
+
+        oob_sum = np.zeros(self.n)
+        oob_count = np.zeros(self.n, dtype=int)
+        X = self.X_train
+
+        for tree in self.trees:
+            # Points NOT in this tree's subsample
+            oob_mask = ~tree.in_subsample_
+            oob_idx = np.where(oob_mask)[0]
+            if len(oob_idx) == 0:
+                continue
+
+            feats, threshs, left_ch, right_ch, starts, sizes, flat_idx = \
+                tree.to_arrays()
+            max_leaf = int(sizes.max()) if sizes.max() > 0 else 1
+
+            leaf_indices, leaf_sizes = traverse_tree_batch(
+                X[oob_idx], feats, threshs, left_ch, right_ch,
+                starts, sizes, flat_idx, max_leaf
+            )
+            preds = batch_predict_from_leaves(
+                self.Y_resid, self.W_resid, leaf_indices, leaf_sizes
+            )
+
+            oob_sum[oob_idx] += preds
+            oob_count[oob_idx] += 1
+
+        oob_tau = np.where(oob_count > 0, oob_sum / oob_count, np.nan)
+        return oob_tau
+
+    # ------------------------------------------------------------------
+    # econml-compatible API
+    # ------------------------------------------------------------------
+
     def effect(self, X):
-        """econml-compatible API."""
         return self.predict(X, return_std=False)
-    
+
     def effect_interval(self, X, alpha=0.05):
-        """econml-compatible API."""
         _, lower, upper = self.predict_interval(X, alpha)
         return lower.reshape(-1, 1), upper.reshape(-1, 1)
-
