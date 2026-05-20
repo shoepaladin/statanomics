@@ -22,6 +22,25 @@ from .numba_core import (
 logger = logging.getLogger(__name__)
 
 
+def _build_tree_worker(X, Y_resid, W_resid, split_idx, est_idx, seed,
+                       min_leaf_size, max_depth, mtry, n_quantiles):
+    """
+    Module-level function so loky can pickle it for multiprocessing.
+
+    use_parallel=False: within each worker process we run feature search
+    sequentially, letting the OS schedule worker processes across cores
+    instead of each tree spinning up its own Numba thread pool.
+    """
+    tree = NumbaCausalTree(
+        min_leaf_size=min_leaf_size, max_depth=max_depth,
+        mtry=mtry, n_quantiles=n_quantiles,
+        use_parallel=False,
+    )
+    tree.fit(X, Y_resid, W_resid, split_idx, est_idx,
+             rng=np.random.default_rng(seed))
+    return tree
+
+
 class NumbaCausalForest:
     """
     Numba-optimized causal forest.
@@ -55,7 +74,7 @@ class NumbaCausalForest:
     def __init__(self, n_trees=100, subsample_ratio=0.5,
                  min_leaf_size=10, max_depth=10,
                  mtry=None, n_quantiles=20,
-                 n_folds=5, honesty_fraction=0.5,
+                 n_folds=4, honesty_fraction=0.5,
                  use_parallel=True, n_jobs=1,
                  verbose=0, random_state=None):
         self.n_trees = n_trees
@@ -129,8 +148,22 @@ class NumbaCausalForest:
         subsamples = self._draw_subsamples()
 
         if self.n_jobs != 1:
-            self.trees = Parallel(n_jobs=self.n_jobs, backend='threading')(
-                delayed(self._build_single_tree)(split_idx, est_idx, seed)
+            # loky (separate processes) avoids two failure modes of threading:
+            #   1. GIL: Python recursion in _build_tree holds GIL, so threading
+            #      cannot truly parallelize the Python layer.
+            #   2. Thread pool oversubscription: each tree uses Numba prange
+            #      internally, spinning up n_cpu threads. With k joblib threads,
+            #      that creates k * n_cpu threads on n_cpu cores — severe thrashing.
+            # loky gives each worker its own process+address space. We disable
+            # use_parallel within each worker so each process runs sequentially
+            # inside and lets the OS schedule processes across cores cleanly.
+            self.trees = Parallel(n_jobs=self.n_jobs, backend='loky')(
+                delayed(_build_tree_worker)(
+                    self.X_train, self.Y_resid, self.W_resid,
+                    split_idx, est_idx, seed,
+                    self.min_leaf_size, self.max_depth,
+                    self.mtry, self.n_quantiles
+                )
                 for split_idx, est_idx, seed in subsamples
             )
         else:
