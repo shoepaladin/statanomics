@@ -1,3 +1,10 @@
 
 workingcode/panelmodels/panel testing.ipynb
 workingcode/panelmodels/.ipynb_checkpoints/panel testing-checkpoint.ipynb
+
+# Python cache — never commit these
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
