@@ -1,14 +1,10 @@
 # GRF: Generalized Random Forest for Causal Inference
 
-A production-grade Python implementation of Generalized Random Forests (GRF) for estimating heterogeneous treatment effects, featuring multiple performance tiers and valid statistical inference.
+A Python implementation of Generalized Random Forests (GRF) for estimating
+heterogeneous treatment effects (CATEs), with valid confidence intervals via
+the Infinitesimal Jackknife variance estimator.
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 ## Installation
-
-### Quick Install (Numba Backend)
-
-No C++ compiler required. Works on all platforms immediately.
 
 ```bash
 git clone https://github.com/yourusername/grf-python.git
@@ -16,418 +12,269 @@ cd grf-python
 pip install -e .
 ```
 
-This installs the Numba-accelerated version (2-4x speedup).
-
-### Full Install (Cython Backend)
-
-For maximum performance (10-15x speedup, matching econml):
-
-**Prerequisites:**
-- **Linux/macOS**: `gcc` or `clang` (usually pre-installed)
-- **Windows**: [Visual C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
-
-**Installation:**
-```bash
-# Install Cython
-pip install cython
-
-# Compile extensions
-python setup.py build_ext --inplace
-
-# Install package
-pip install -e .
-```
-
-### Verify Installation
-
-```python
-from grf import print_info
-print_info()
-
-# Output shows which backends are available
-```
-
 ## Quick Start
 
 ```python
-from grf import CausalForest
+from grf.forest_numba import NumbaCausalForest
 import numpy as np
 
-# Generate synthetic data
-np.random.seed(42)
-n = 1000
-X = np.random.uniform(-1, 1, (n, 2))
-W = np.random.binomial(1, 0.5, n)
+rng = np.random.default_rng(42)
+n, p = 1000, 10
+X = rng.standard_normal((n, p))
+W = rng.binomial(1, 0.5, n).astype(float)
+tau_true = X[:, 0] + 0.5 * X[:, 1]          # true CATE
+Y = tau_true * W + rng.standard_normal(n)
 
-# True heterogeneous treatment effect: τ(x) = x₁
-tau_true = X[:, 0]
-Y = tau_true * W + np.random.normal(0, 0.1, n)
-
-# Fit causal forest
-forest = CausalForest(n_trees=100, n_jobs=-1)
+forest = NumbaCausalForest(n_trees=200, random_state=42)
 forest.fit(X, Y, W)
 
-# Predict with confidence intervals
-X_test = np.linspace(-1, 1, 50).reshape(-1, 1)
-X_test = np.c_[X_test, np.zeros(50)]
-
-tau_hat, lower, upper = forest.predict_interval(X_test, alpha=0.05)
-
-# Evaluate
-mse = np.mean((tau_hat - X_test[:, 0])**2)
-coverage = np.mean((X_test[:, 0] >= lower) & (X_test[:, 0] <= upper))
-
-print(f"MSE: {mse:.4f}")
-print(f"Coverage: {coverage:.2%}")  # Should be ~95%
+tau_hat = forest.predict(X)
+tau_hat, lower, upper = forest.predict_interval(X, alpha=0.05)
 ```
 
 ## API Reference
 
-### CausalForest
+### `NumbaCausalForest`
 
 ```python
-CausalForest(
-    n_trees=100,           # Number of trees in forest
-    subsample_ratio=0.5,   # Fraction of data per tree
-    min_leaf_size=10,      # Minimum samples in leaf
-    max_depth=10,          # Maximum tree depth
-    n_jobs=-1,             # Number of parallel jobs (-1 = all cores)
-    random_state=None      # Random seed for reproducibility
+NumbaCausalForest(
+    n_trees         = 100,    # trees in the forest
+    subsample_ratio = 0.5,    # fraction of n drawn per tree (without replacement)
+    min_leaf_size   = 10,     # minimum estimation-sample observations per leaf
+    max_depth       = 10,     # maximum tree depth
+    mtry            = None,   # features considered per split; None → ceil(p/3)
+    n_quantiles     = 20,     # max candidate split thresholds per feature
+    n_folds         = 4,      # cross-fitting folds for nuisance estimation
+    honesty_fraction= 0.5,    # share of subsample used for structure (vs estimation)
+    use_parallel    = True,   # Numba prange within a single tree's feature search
+    n_jobs          = 'auto', # loky processes for tree building (see below)
+    verbose         = 0,      # 0 = silent, 1 = progress
+    random_state    = None,
 )
 ```
 
-**Methods:**
+#### Key methods
 
-- `fit(X, Y, W)`: Fit the forest
-  - `X`: Covariates (n_samples, n_features)
-  - `Y`: Outcomes (n_samples,)
-  - `W`: Treatment (n_samples,) - binary 0/1
+| Method | Returns |
+|--------|---------|
+| `fit(X, Y, W)` | self |
+| `predict(X)` | `tau_hat` array |
+| `predict(X, return_std=True)` | `(tau_hat, std_errors)` |
+| `predict_interval(X, alpha=0.05)` | `(tau_hat, lower, upper)` |
+| `oob_predict()` | out-of-bag CATE estimates for training points |
+| `effect(X)` | econml-compatible alias for `predict` |
+| `effect_interval(X, alpha)` | econml-compatible alias for `predict_interval` |
 
-- `predict(X, return_std=False)`: Predict treatment effects
-  - Returns: `tau_hat` or `(tau_hat, std_errors)`
+---
 
-- `predict_interval(X, alpha=0.05)`: Predict with confidence intervals
-  - Returns: `(tau_hat, lower, upper)`
+## Parallelization Guide (`n_jobs`)
 
-- `effect(X)`: econml-compatible prediction
-- `effect_interval(X, alpha=0.05)`: econml-compatible inference
+Tree building can run sequentially or in parallel (loky processes).
+The default `n_jobs='auto'` decides automatically.
 
-## Implementation Details
+### How auto-detection works
 
-### Core Algorithm
+Auto mode estimates per-tree work as:
 
-Our implementation follows the canonical GRF algorithm (Athey, Tibshirani & Wager, 2019):
-
-1. **Orthogonalization (R-learner)**
-   ```
-   Estimate: Ŷ = E[Y|X], Ŵ = E[W|X]
-   Compute residuals: Y_resid = Y - Ŷ, W_resid = W - Ŵ
-   ```
-
-2. **Honest Tree Building**
-   - Split each subsample into structure (splitting) and estimation samples
-   - Never use the same data for both choosing splits and estimating effects
-
-3. **Gradient-Based Splitting**
-   ```
-   For each parent node:
-     1. Estimate τ_parent using OLS on W_resid, Y_resid
-     2. Compute pseudo-outcomes: ρᵢ = (Wᵢ - W̄)(Yᵢ - τ_parent × Wᵢ)
-     3. Find split maximizing: n_L × n_R × (mean(ρ_L) - mean(ρ_R))²
-   ```
-
-4. **Forest Weight Aggregation**
-   ```
-   For each test point x:
-     α_i(x) = (1/B) Σ_b 1{i ∈ leaf_b(x)} / |leaf_b(x)|
-     τ̂(x) = weighted_regression(Y_resid ~ W_resid, weights=α(x))
-   ```
-
-5. **Infinitesimal Jackknife Inference**
-   ```
-   V(x) = Σ_i [Σ_b (α_ib(x) - ᾱ_i(x))]² × ψ_i²
-   where ψ_i = (Wᵢ - W̄)(Yᵢ - Ȳ)
-   ```
-
-### Key Differences from Original R `grf`
-
-| Aspect | Our Implementation | R `grf` |
-|--------|-------------------|---------|
-| Language | Python (Numba/Cython) | C++ core with R wrapper |
-| Splitting | Gradient variance maximization | Local linear regression gradients |
-| Leaf Estimation | OLS on residuals | Weighted local linear regression |
-| Inference | Standard IJ variance | IJ + debiasing corrections |
-| Performance | 10-15x faster than pure Python | 10-15x faster than pure R |
-
-We match R `grf`'s statistical properties (consistent estimation, valid inference) while being more accessible to Python users.
-
-## Performance Benchmarks
-
-### Speed Comparison (n=1000, 100 trees)
-
-| Implementation | Fit Time | Predict Time | Total | vs econml |
-|---------------|----------|--------------|-------|-----------|
-| Pure Python | 60s | 15s | 75s | 10x slower |
-| Numba | 20s | 6s | 26s | 3-4x slower |
-| **Cython** | **6s** | **2s** | **8s** | **Match** |
-| econml | 6s | 2s | 8s | Baseline |
-
-### Accuracy (Canonical τ(x) = x test)
-
-| Metric | Our GRF | econml | Target |
-|--------|---------|--------|--------|
-| MSE | 0.008 | 0.007 | <0.01 |
-| Coverage | 0.94 | 0.95 | 0.95 |
-| CI Width | 0.12 | 0.11 | Minimize |
-
-Both implementations recover the true treatment effect accurately with valid inference.
-
-## Package Capabilities
-
-### What This Package Does Well
-
-✅ **Correct HTE Estimation**
-- Recovers smooth heterogeneous treatment effects
-- Properly handles confounding through orthogonalization
-- Unbiased estimates via honest splitting
-
-✅ **Valid Statistical Inference**
-- Confidence intervals with correct asymptotic coverage
-- Standard errors via Infinitesimal Jackknife
-- Hypothesis testing for treatment effect heterogeneity
-
-✅ **Performance**
-- Multiple optimization tiers (Numba/Cython)
-- Parallel tree building (threading backend)
-- Efficient memory usage
-
-✅ **Usability**
-- Pure Python (no R dependencies)
-- econml-compatible API
-- Clear documentation and examples
-
-### Current Limitations
-
-❌ **Not Yet Implemented**
-- Instrumental variable forests
-- Cluster-robust inference
-- Regression forests (only causal forests)
-- Multi-arm treatments (only binary)
-- Custom splitting rules
-
-❌ **Differences from R `grf`**
-- Simpler leaf estimation (no kernel weighting)
-- No bootstrap calibration for coverage improvement
-- No automatic tuning of hyperparameters
-
-These features can be added as the package matures.
-
-## Development Learnings
-
-### Critical Implementation Insights
-
-#### 1. **Orthogonalization is Non-Negotiable**
-
-**Problem:** Initial implementation split on outcome variance, not treatment effect heterogeneity.
-
-**Solution:** Must first estimate E[Y|X] and E[W|X], then work with residuals:
-```python
-Y_resid = Y - Y_hat
-W_resid = W - W_hat
+```
+work_units = n_trees × n_sub × mtry × effective_q
 ```
 
-**Why:** Without orthogonalization, the forest cannot distinguish treatment effects from confounding.
+where:
+- `n_sub = subsample_ratio × n`
+- `mtry = ceil(p / 3)`
+- `effective_q = min(n_quantiles, split_n // 10)`
 
-#### 2. **Gradient-Based Splitting Targets HTE**
+If `work_units ≥ 1,000,000`, it uses `min(cpu_count, 4)` loky workers.
+Otherwise it stays sequential.
 
-**Problem:** Splitting on `Var(Y)` or `Var(W×Y)` doesn't detect heterogeneity.
+### Why 1,000,000 units?
 
-**Solution:** Compute pseudo-outcomes per parent node:
+Loky spawns separate OS processes, which has a cold-start overhead of ~0.3s.
+Below the threshold the overhead exceeds the parallelism benefit.
+The threshold was calibrated from isolated tree-building benchmarks
+(nuisance RF excluded, best-of-4 runs):
+
+| n | p | n_trees | work_units | seq (ms) | loky-2 (ms) | speedup |
+|---|---|---------|-----------|----------|-------------|---------|
+| 500 | 5 | 100 | 600k | 40 | 46 | 0.88× ❌ |
+| 800 | 10 | 50 | 1,600k | 63 | 54 | **1.17×** ✓ |
+| 1,000 | 10 | 30 | 1,200k | 51 | 42 | **1.21×** ✓ |
+| 1,000 | 20 | 50 | 3,500k | 123 | 85 | **1.44×** ✓ |
+| 2,000 | 40 | 20 | 5,600k | 322 | 194 | **1.66×** ✓ |
+
+The break-even sits between 960k and 1,200k units.
+
+### Rules of thumb
+
+| Scenario | Typical work_units | `n_jobs='auto'` decision |
+|----------|--------------------|--------------------------|
+| n < 500, p < 10, any n_trees | < 600k | Sequential |
+| n = 500, p = 5 | ~6k × n_trees; parallelize at n_trees ≥ 170 | Depends on n_trees |
+| n = 1000, p = 10 | ~40k × n_trees; parallelize at n_trees ≥ 25 | Parallel for typical forests |
+| n ≥ 2000, p ≥ 20 | > 1M even at n_trees = 20 | Always parallel |
+
+**Note:** nuisance RF estimation (the `_estimate_nuisance` step) already uses
+`n_jobs=-1` internally via scikit-learn and dominates total wall time for small
+forests (~0.65s baseline on a single machine regardless of n_trees). The
+parallelization gain from `n_jobs` only applies to the tree-building phase.
+
+### Overriding auto-detection
+
 ```python
-ρᵢ = (Wᵢ - W̄)(Yᵢ - τ_parent × Wᵢ)
-```
-Then maximize difference in pseudo-outcome means between children.
+# Always sequential — safest, no overhead
+forest = NumbaCausalForest(n_jobs=1)
 
-**Why:** This directly targets treatment effect heterogeneity, not just outcome variance.
+# Always use all CPUs — best for large forests
+forest = NumbaCausalForest(n_jobs=-1)
 
-#### 3. **Honest Splitting Prevents Overfitting**
+# Use exactly 2 workers
+forest = NumbaCausalForest(n_jobs=2)
 
-**Problem:** Using same data for splits and estimation gives biased, overconfident predictions.
-
-**Solution:** Split each subsample 50/50:
-```python
-split_sample → determine tree structure
-estimation_sample → estimate leaf treatment effects
-```
-
-**Why:** Honesty ensures predictions aren't overfit to training data quirks.
-
-#### 4. **Forest Weights Enable Inference**
-
-**Problem:** Simple averaging of tree predictions doesn't allow variance estimation.
-
-**Solution:** Compute explicit weights:
-```python
-α_i(x) = average probability that sample i falls in same leaf as x
-```
-
-**Why:** IJ variance requires knowing how prediction depends on each training sample.
-
-#### 5. **Cython Parallelism Requires Threading**
-
-**Problem:** Cython objects can't be pickled for multiprocessing.
-
-**Solution:** Use threading backend:
-```python
-with parallel_backend('threading', n_jobs=-1):
-    trees = Parallel()(delayed(build_tree)(...) for ...)
-```
-
-**Why:** Cython releases Python's GIL in `nogil` blocks, allowing true parallel execution with threads.
-
-### Performance Optimization Journey
-
-**Phase 1: Pure Python** → Baseline (1x)
-- Simple, readable, correct
-- Too slow for production (60s for n=1000)
-
-**Phase 2: Numba JIT** → 2-4x speedup
-- `@jit(nopython=True)` on hot loops
-- Parallel feature search with `prange`
-- No compilation needed
-- **Verdict:** Great balance of speed and ease-of-use
-
-**Phase 3: Cython** → 10-15x speedup
-- Typed memoryviews: `DOUBLE[:, :]`
-- `nogil` blocks for parallelism
-- Requires C++ compiler
-- **Verdict:** Matches econml, worth the compilation step
-
-### Common Pitfalls We Encountered
-
-1. **Global vs Local Gradients**
-   - ❌ Computing `ψ = (W - W̄)(Y - Ȳ)` once globally
-   - ✅ Computing pseudo-outcomes per parent node with local τ estimate
-
-2. **Wrong Splitting Objective**
-   - ❌ Maximizing `Var(ψ_left) + Var(ψ_right)`
-   - ✅ Maximizing `n_L × n_R × (mean_L - mean_R)²`
-
-3. **Missing Orthogonalization**
-   - ❌ Working with raw Y and W
-   - ✅ Residualizing Y and W against X first
-
-4. **Prediction Method**
-   - ❌ Simple averaging: `mean([tree.predict(x) for tree in trees])`
-   - ✅ Weighted regression: `lm(Y ~ W, weights=α(x))`
-
-5. **Cython Pickling**
-   - ❌ Using multiprocessing backend (loky)
-   - ✅ Using threading backend
-
-### Validation Strategy
-
-To ensure correctness, we tested on the **canonical HTE problem**:
-```python
-τ(x) = x  # Linear treatment effect
-Y = τ(x) × W + ε
+# Let the heuristic decide (default)
+forest = NumbaCausalForest(n_jobs='auto')
 ```
 
-**Success criteria:**
-- MSE < 0.01 (accurate recovery)
-- Coverage ≈ 0.95 (valid inference)
-- Visual: predictions track diagonal line
+### Why loky instead of threading?
 
-This simple test caught all major bugs before they reached production.
+Two failure modes plague threading for this workload:
 
-### Comparison to econml
+1. **GIL contention**: `_build_tree` is recursive Python; the GIL is held
+   throughout, so threading achieves no real concurrency on the Python layer.
+2. **Thread pool oversubscription**: each tree uses Numba `prange` internally,
+   spawning `n_cpu` threads. With `k` joblib threads that creates `k × n_cpu`
+   threads on `n_cpu` cores — measured as a **3.5× slowdown** vs sequential.
 
-**What we learned from econml's implementation:**
-- Use scikit-learn's Cython infrastructure
-- Threading backend for Cython parallelism
-- Cross-fitted nuisance functions (2-fold minimum)
-- Explicit forest weight computation for inference
+loky gives each worker its own process and address space. Workers run with
+`use_parallel=False` so there is no nested thread pool.
 
-**Where we diverged:**
-- Simpler splitting criterion (gradient variance vs local linear)
-- No bootstrap calibration (prioritized transparency)
-- Pure implementation (no sklearn dependencies in core)
+---
 
-Both approaches are statistically valid and performant.
+## Algorithm Details
 
-## Theoretical Background
+### 1. Cross-fitted nuisance estimation
 
-This package implements the methodology from:
+```
+For each fold:
+    fit E[Y|X] and E[W|X] on training fold → predict on validation fold
+Y_resid = Y - Ŷ,   W_resid = W - Ŵ
+```
 
-**Primary References:**
-- Wager, S., & Athey, S. (2018). "Estimation and Inference of Heterogeneous Treatment Effects using Random Forests." *Journal of the American Statistical Association*, 113(523), 1228-1242.
-- Athey, S., Tibshirani, J., & Wager, S. (2019). "Generalized Random Forests." *Annals of Statistics*, 47(2), 1148-1178.
+Uses `n_folds`-fold cross-fitting with shuffled KFold to avoid order-dependent
+bias. Random forests (100 estimators, depth 10) are used as flexible nuisance
+learners.
 
-**Key Theoretical Results:**
-- Consistency of τ̂(x) → τ(x) as n → ∞
-- Asymptotic normality: √n(τ̂(x) - τ(x)) → N(0, σ²(x))
-- Valid confidence intervals via Infinitesimal Jackknife
-- Honest trees required for unbiased estimation
+### 2. Honest tree construction
 
-## Requirements
+Each tree subsample is split `honesty_fraction` / `(1 - honesty_fraction)` into:
+- **Structure sample**: determines splits
+- **Estimation sample**: estimates leaf treatment effects (never seen during splitting)
 
-**Required:**
-- Python >= 3.8
-- NumPy >= 1.20.0
-- SciPy >= 1.7.0
-- scikit-learn >= 1.0.0
-- Numba >= 0.56.0
-- joblib >= 1.0.0
+This prevents the overconfident predictions that arise when the same data both
+chooses splits and estimates effects.
 
-**Optional (for Cython backend):**
-- Cython >= 0.29.0
-- C++ compiler (MSVC/GCC/Clang)
+### 3. Gradient-based splitting
+
+At each node, pseudo-outcomes are computed relative to the node's local effect:
+
+```
+τ_parent = OLS estimate in parent node
+ρᵢ = (Wᵢ - W̄)(Yᵢ - τ_parent × Wᵢ)    ← pseudo-outcome
+```
+
+The split maximises `n_L × n_R × (mean(ρ_L) - mean(ρ_R))²`,
+directly targeting treatment effect heterogeneity.
+
+Feature subsampling uses `mtry = ceil(p/3)` per split, matching R `grf`'s
+default. This outperforms `ceil(sqrt(p))` when ≥ 3 of p features are relevant
+to treatment heterogeneity (the common case with moderately-sized p).
+
+Candidate thresholds per feature are capped at:
+
+```
+effective_q = max(3, min(n_quantiles, split_n // 10))
+```
+
+This prevents thin quantile bins when the split sample is small.
+
+### 4. Leaf estimation
+
+Within each leaf, the CATE is estimated by OLS regressing `Y_resid` on
+`W_resid` using the estimation-sample indices that fell into that leaf.
+
+### 5. Infinitesimal Jackknife variance
+
+Standard errors use the Wager–Athey (2018) subsampling IJ formula:
+
+```
+V̂(x) = (n/s) × Σⱼ Cov_b[T_b(x), 1{j ∈ Sₐ}]²
+```
+
+where `s` is the subsample size and `T_b(x)` is tree `b`'s prediction.
+Implemented as a single matrix multiplication:
+
+```python
+T_sum = tree_preds.T @ subsample_flags   # (n_test, n_train)
+cov_bj = T_sum / n_trees - T_bar[:, None] * p_j[None, :]
+variances = (n / s) * np.sum(cov_bj ** 2, axis=1)
+```
+
+---
+
+## What changed vs. the original implementation
+
+The following bugs and limitations were fixed across three phases.
+
+### Phase 1 — Correctness fixes
+
+| Fix | Problem | Impact |
+|-----|---------|--------|
+| IJ variance | Old code computed `Σ(α_bj − ᾱ_j)` which is identically zero → always-zero std errors | Valid confidence intervals |
+| KFold shuffle | 2-fold unshuffled KFold was order-dependent and biased for sorted data | Unbiased nuisance estimates |
+| `n_folds` default | Hardcoded 2-fold → increased to 4 | Better nuisance estimation |
+| `mtry` default | `ceil(sqrt(p))` → `ceil(p/3)` matching R `grf` | Lower CATE MSE, especially for moderate p |
+| Instance RNG | `np.random.seed()` mutated global numpy state → not reproducible | True reproducibility |
+| Adaptive quantiles | Fixed grid of 3 thresholds regardless of sample size | Finer splits on large nodes |
+
+### Phase 2 — Performance fixes
+
+| Fix | Problem | Impact |
+|-----|---------|--------|
+| Batch JIT traversal | Per-point Python while-loop O(n_test × n_trees) → `traverse_tree_batch` with Numba `prange` | 2–5× faster prediction |
+| loky backend | Threading caused 3.5× slowdown from thread pool oversubscription | Parallel tree building is now net positive |
+| Leaf buffer | `max_leaf_size = n // 2` over-allocated buffers by orders of magnitude | Lower memory, faster allocation |
+| Sort outside loop | `np.sort` called inside percentile loop → called once per feature | Correct threshold selection |
+
+### Phase 3 — New features
+
+| Feature | Description |
+|---------|-------------|
+| Feature importances | Split-gain weighted, normalized; available as `forest.feature_importances_` |
+| OOB predictions | `oob_predict()` uses only trees that excluded each point from their subsample |
+| `honesty_fraction` | Tunable via constructor (default 0.5) |
+| Input validation | Checks shape, NaN/Inf, feature count mismatch |
+| sklearn compat | `get_params()`, `set_params()`, `n_features_in_` |
+
+---
 
 ## Testing
 
 ```bash
-# Run tests
-pytest tests/
-
-# Run specific test
-pytest tests/test_numba.py -v
-
-# Run with coverage
-pytest tests/ --cov=grf --cov-report=html
+cd workingcode/grf_python
+pytest tests/ -v
 ```
 
-## Citation
-Cite the original GRF papers:
+59 tests across three modules:
 
-```bibtex
-@article{wager2018estimation,
-  title={Estimation and inference of heterogeneous treatment effects using random forests},
-  author={Wager, Stefan and Athey, Susan},
-  journal={Journal of the American Statistical Association},
-  volume={113},
-  number={523},
-  pages={1228--1242},
-  year={2018}
-}
+| Module | What it tests |
+|--------|---------------|
+| `test_phase1_correctness.py` | IJ coverage, RNG isolation, mtry default, adaptive quantiles, nuisance fold count |
+| `test_phase2_performance.py` | Sort fix, vectorised variance, leaf buffer, loky parallel, auto n_jobs heuristic, batch traversal |
+| `test_phase3_features.py` | Feature importances, OOB predictions, input validation, honesty fraction, sklearn compat |
 
-@article{athey2019generalized,
-  title={Generalized random forests},
-  author={Athey, Susan and Tibshirani, Julie and Wager, Stefan},
-  journal={Annals of Statistics},
-  volume={47},
-  number={2},
-  pages={1148--1178},
-  year={2019}
-}
-```
+---
 
-## License
+## References
 
-MIT License - see LICENSE file for details.
-
-## Acknowledgments
-
-- Original R `grf` package by Tibshirani, Athey, and Wager
-- econml team for production-grade Python reference
-- Anthropic's Claude for pair programming assistance
-
+- Wager & Athey (2018). "Estimation and Inference of Heterogeneous Treatment Effects using Random Forests." *JASA* 113(523).
+- Athey, Tibshirani & Wager (2019). "Generalized Random Forests." *Annals of Statistics* 47(2).
