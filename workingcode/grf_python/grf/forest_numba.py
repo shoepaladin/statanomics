@@ -16,7 +16,8 @@ from .numba_core import (
     estimate_tau_ols_numba,
     traverse_tree_batch,
     batch_predict_from_leaves,
-    compute_ij_variance,
+    accumulate_omega_tree,
+    compute_delta_variance,
     compute_variance_from_tree_preds,
 )
 
@@ -318,7 +319,11 @@ class NumbaCausalForest:
         Predict CATEs.
 
         Uses batch JIT-compiled tree traversal instead of per-point
-        Python while-loops, and per-tree variance for inference.
+        Python while-loops, and delta-method variance for inference.
+
+        Variance formula: V(x) = sigma^2 * sum_j Omega_j(x)^2
+        where Omega_j(x) = (1/B) sum_b [W_resid_j / sum_k W_resid_k^2]
+        for k in est_leaf_b(x), and sigma^2 = mean(Y_resid^2).
         """
         if not hasattr(self, 'trees'):
             raise RuntimeError("Call fit() before predict()")
@@ -330,14 +335,16 @@ class NumbaCausalForest:
         X = np.ascontiguousarray(X, dtype=np.float64)
         n_test = len(X)
 
-        # Collect per-tree predictions using batch JIT traversal
+        # Collect per-tree predictions; also accumulate delta-method weights
         tree_preds = np.zeros((self.n_trees, n_test))
+
+        if return_std:
+            Omega = np.zeros((self.n, n_test), dtype=np.float64)
 
         for b, tree in enumerate(self.trees):
             feats, threshs, left_ch, right_ch, starts, sizes, flat_idx = \
                 tree.to_arrays()
 
-            # Determine the max leaf size for this tree (avoids over-allocation)
             max_leaf = int(sizes.max()) if sizes.max() > 0 else 1
 
             leaf_indices, leaf_sizes = traverse_tree_batch(
@@ -349,19 +356,17 @@ class NumbaCausalForest:
                 self.Y_resid, self.W_resid, leaf_indices, leaf_sizes
             )
 
+            if return_std:
+                accumulate_omega_tree(
+                    Omega, leaf_indices, leaf_sizes, self.W_resid, self.n_trees
+                )
+
         tau_hat = np.mean(tree_preds, axis=0)
 
         if not return_std:
             return tau_hat
 
-        # Build (n_trees, n_train) subsample membership matrix for IJ
-        subsample_flags = np.array(
-            [t.in_subsample_ for t in self.trees], dtype=bool
-        )
-        variances = compute_ij_variance(
-            tree_preds, subsample_flags,
-            self._subsample_size, self.n
-        )
+        variances = compute_delta_variance(Omega, self.Y_resid)
         std = np.sqrt(np.maximum(variances, 0.0))
         return tau_hat, std
 

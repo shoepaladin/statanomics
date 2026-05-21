@@ -237,6 +237,63 @@ def compute_tree_weights_numba(leaf_indices, leaf_sizes, n_train):
     return weights
 
 
+@jit(nopython=True, cache=True)
+def accumulate_omega_tree(Omega, leaf_indices, leaf_sizes, W_resid, n_trees):
+    """
+    Accumulate one tree's contribution to the forest OLS weight matrix Omega.
+
+    For each test point i, adds w_{j,b}(i) / B to Omega[j, i] for every
+    estimation-sample obs j in the leaf:
+
+        w_{j,b}(i) = W_resid[j] / sum_{k in leaf} W_resid[k]^2
+
+    Call once per tree; after B trees Omega[j,i] = (1/B) sum_b w_{j,b}(i).
+
+    Parameters
+    ----------
+    Omega : float64 array (n_train, n_test)   accumulated in-place
+    leaf_indices : int32 array (n_test, max_leaf)
+    leaf_sizes   : int32 array (n_test,)
+    W_resid      : float64 array (n_train,)
+    n_trees      : int  (B — the forest size, used to normalise)
+    """
+    n_test = leaf_indices.shape[0]
+    inv_B = 1.0 / n_trees
+    for i in range(n_test):
+        sz = leaf_sizes[i]
+        if sz < 2:
+            continue
+        denom = 0.0
+        for k in range(sz):
+            j = leaf_indices[i, k]
+            denom += W_resid[j] * W_resid[j]
+        if denom < 1e-10:
+            continue
+        scale = inv_B / denom
+        for k in range(sz):
+            j = leaf_indices[i, k]
+            Omega[j, i] += W_resid[j] * scale
+
+
+def compute_delta_variance(Omega, Y_resid):
+    """
+    Delta method variance: V(x) = sigma^2 * sum_j Omega_j(x)^2.
+
+    sigma^2 is estimated from the training residuals mean(Y_resid^2).
+
+    Parameters
+    ----------
+    Omega   : float64 array (n_train, n_test)
+    Y_resid : float64 array (n_train,)
+
+    Returns
+    -------
+    variances : float64 array (n_test,)
+    """
+    sigma2 = np.mean(Y_resid ** 2)
+    return sigma2 * np.sum(Omega ** 2, axis=0)
+
+
 def compute_ij_variance(tree_preds, subsample_flags, subsample_size, n_train):
     """
     Proper Infinitesimal Jackknife variance for a subsampling forest.
