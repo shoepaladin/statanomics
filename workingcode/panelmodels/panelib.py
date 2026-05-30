@@ -1108,7 +1108,7 @@ class dgp:
                'pre_pst_lengths':permutations_subset_block[1]}
 
     def simulate_panel(seed=42, T_pre=20, T_post=5, N_control=30,
-                       noise_sd=0.1, att_pct=0.15, sigma_lambda=0.0):
+                       noise_sd=0.1, att_pct=0.15, sigma_lambda=0.0, rho=0.8):
         """
         Simulate a balanced panel with one treated unit and N_control control units.
 
@@ -1116,12 +1116,18 @@ class dgp:
         ----------
         sigma_lambda : float
             Std-dev of unit-specific time trends. 0 → parallel trends holds.
+        rho : float
+            AR(1) coefficient for the common time trend (0 = white noise,
+            <1 = stationary, 1 = random walk). The trend is initialised at
+            its stationary variance so there is no burn-in bias.
 
         Returns
         -------
         (df, true_att) : tuple
             df has columns [unit_id, time, treated, post, y].
             true_att is the true average treatment effect on the treated.
+            The treatment effect is added to the baseline AFTER the full
+            AR(1) trend is generated, so it is not subject to the AR process.
         """
         rng_ = np.random.default_rng(seed)
         N_total = N_control + 1          # last index is the treated unit
@@ -1130,8 +1136,17 @@ class dgp:
         # Unit fixed effects — drawn positive so pre-period means are positive
         alpha_i = rng_.uniform(1.0, 3.0, N_total)
 
-        # Common time shocks (random walk, shared by all units)
-        delta_t = np.cumsum(rng_.standard_normal(T_total) * 0.3)
+        # Common time trend: AR(1) with coefficient rho.
+        # Innovations ~ N(0, 0.09); initialised at stationary variance
+        # so the series has consistent scale regardless of rho.
+        sigma_eta = 0.3
+        eta = rng_.standard_normal(T_total) * sigma_eta
+        delta_t = np.zeros(T_total)
+        # Stationary initialisation: Var(delta) = sigma_eta^2 / (1 - rho^2)
+        init_sd = sigma_eta / np.sqrt(1.0 - rho ** 2) if abs(rho) < 1 else sigma_eta
+        delta_t[0] = rng_.standard_normal() * init_sd
+        for t in range(1, T_total):
+            delta_t[t] = rho * delta_t[t - 1] + eta[t]
 
         # Unit-specific time trends (0 when sigma_lambda=0 → parallel trends)
         lambda_i = rng_.standard_normal(N_total) * sigma_lambda
