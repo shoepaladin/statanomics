@@ -36,8 +36,13 @@ import numpy as np
 import os as os 
 
 import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-from IPython.display import display    
+try:
+    _ipy = get_ipython()
+    if _ipy is not None:
+        _ipy.run_line_magic('matplotlib', 'inline')
+except NameError:
+    pass
+from IPython.display import display
 
 # %load_ext nb_js_diagrammers
 
@@ -358,7 +363,7 @@ class sdid:
         ## Write the omega and lambda weights for inspection:
         omega_df = pd.DataFrame({'omega': omega_sdid}, index=control_units)
         lambda_df = pd.DataFrame({'lambda': lambda_sdid},
-                                 index=[pd.to_datetime(t).strftime("%Y-%m-%d") for t in pre_dates])
+                                 index=[str(t) for t in pre_dates])
 
         '''
         Output the ATET from the final WLS model, and estimate the counterfactual trend.
@@ -402,9 +407,58 @@ class sdid:
         return {'sdid': df_twfe, 'sdid_model': twfe_model,
                 'omega_weights': omega_df, 'lambda_weights': lambda_df,
                 'counterfactual': c_df}
-    
+
+    def sdid_permutation_inference(data=None,
+                                   data_dict={'treatment': None, 'date': None,
+                                              'post': None, 'unitid': None, 'outcome': None},
+                                   n_placebo=None,
+                                   seed=0):
+        """
+        Permutation inference for SDID.
+        Assigns fake treatment to each of n_placebo control units in turn,
+        re-estimates SDID, and uses the resulting null distribution to build
+        a p-value and SE-based confidence interval around the real ATT.
+        """
+        real_result = sdid.twfe_sdid(data=data, data_dict=data_dict)
+        real_att = float(real_result['sdid'].loc['post_SDiD', 'coef_'])
+
+        treated_ids = data.loc[data[data_dict['treatment']] == 1,
+                               data_dict['unitid']].unique()
+        control_ids = data.loc[data[data_dict['treatment']] == 0,
+                               data_dict['unitid']].unique()
+
+        if n_placebo is None:
+            n_placebo = min(20, len(control_ids))
+
+        rng_ = np.random.default_rng(seed)
+        chosen = rng_.choice(control_ids, size=n_placebo, replace=False)
+
+        placebo_atts = []
+        for pu in chosen:
+            df_p = data[~data[data_dict['unitid']].isin(treated_ids)].copy()
+            df_p[data_dict['treatment']] = (
+                df_p[data_dict['unitid']] == pu).astype(int)
+            try:
+                pr = sdid.twfe_sdid(data=df_p, data_dict=data_dict)
+                placebo_atts.append(float(pr['sdid'].loc['post_SDiD', 'coef_']))
+            except Exception:
+                pass
+
+        placebo_atts = np.array(placebo_atts)
+        se = float(np.std(placebo_atts, ddof=1)) if len(placebo_atts) > 1 else float('nan')
+        pvalue = float(np.mean(np.abs(placebo_atts) >= np.abs(real_att)))
+        ci_lower = real_att - 1.96 * se
+        ci_upper = real_att + 1.96 * se
+
+        return {
+            'real_att': real_att,
+            'ci': (float(ci_lower), float(ci_upper)),
+            'se': se,
+            'pvalue': pvalue,
+        }
+
     '''
-    **Step 1** Estimate the regularization parameter    
+    **Step 1** Estimate the regularization parameter
     '''
     
     def comp_reg_parameter(data_control_pre=None,
@@ -942,12 +996,68 @@ class dgp:
                                                                          time_unit=date,
                                                                          post=post)
                 
-        return {'C_pre':C_pre, 'C_pst':C_pst, 'T_pre':T_pre, 'T_pst':T_pst, 
+        return {'C_pre':C_pre, 'C_pst':C_pst, 'T_pre':T_pre, 'T_pst':T_pst,
                 'time_scramble':permutations_subset_block[0],
                'pre_pst_lengths':permutations_subset_block[1]}
-        
 
-    
+    def simulate_panel(seed=42, T_pre=20, T_post=5, N_control=30,
+                       noise_sd=0.1, att_pct=0.15, sigma_lambda=0.0):
+        """
+        Simulate a balanced panel with one treated unit and N_control control units.
+
+        Parameters
+        ----------
+        sigma_lambda : float
+            Std-dev of unit-specific time trends. 0 → parallel trends holds.
+
+        Returns
+        -------
+        (df, true_att) : tuple
+            df has columns [unit_id, time, treated, post, y].
+            true_att is the true average treatment effect on the treated.
+        """
+        rng_ = np.random.default_rng(seed)
+        N_total = N_control + 1          # last index is the treated unit
+        T_total = T_pre + T_post
+
+        # Unit fixed effects — drawn positive so pre-period means are positive
+        alpha_i = rng_.uniform(1.0, 3.0, N_total)
+
+        # Common time shocks (random walk, shared by all units)
+        delta_t = np.cumsum(rng_.standard_normal(T_total) * 0.3)
+
+        # Unit-specific time trends (0 when sigma_lambda=0 → parallel trends)
+        lambda_i = rng_.standard_normal(N_total) * sigma_lambda
+
+        rows = []
+        for i in range(N_total):
+            is_treated_unit = (i == N_total - 1)
+            for t in range(T_total):
+                is_post = int(t >= T_pre)
+                y = (alpha_i[i] + delta_t[t]
+                     + lambda_i[i] * t
+                     + rng_.standard_normal() * noise_sd)
+                rows.append({
+                    'unit_id': f'u{i:03d}',
+                    'time':    t,
+                    'treated': int(is_treated_unit),
+                    'post':    is_post,
+                    '_base_y': y,
+                })
+
+        df = pd.DataFrame(rows)
+
+        treat_pre_mean = df.loc[
+            (df['treated'] == 1) & (df['post'] == 0), '_base_y'].mean()
+        true_att = att_pct * abs(treat_pre_mean)
+
+        df['y'] = df['_base_y'].copy()
+        df.loc[(df['treated'] == 1) & (df['post'] == 1), 'y'] += true_att
+        df.drop(columns=['_base_y'], inplace=True)
+
+        return df, true_att
+
+
 
 
 # In[47]:
