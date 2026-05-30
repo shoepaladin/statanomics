@@ -287,12 +287,51 @@ class did:
 
         
         
-        return {'twfe':df_twfe, 
+        return {'twfe':df_twfe,
                 'twfe_c': df_c,
                 'twfe_model':twfe_model,
                 'event_study':pd.concat([event_pre_df, event_pst_df]),
                 'event_study_c':df_event_study_c,
                'event_study_model':event_model}
+
+    def conformal_inference(data=None,
+                            covariates=[],
+                            data_dict={'treatment':None,
+                                       'date':None,
+                                       'post':None,
+                                       'unitid':None,
+                                       'outcome':None},
+                            theta_grid=None,
+                            alpha=0.05):
+        '''
+        Conformal inference for the DiD (TWFE) counterfactual, using the same
+        permutation procedure as the SC models. The treated unit's observed
+        trajectory is compared against the TWFE counterfactual; pre-period
+        misfit (e.g. under a parallel-trends violation) widens the interval.
+
+        Returns {'real_att', 'ci', 'se', 'pvalue'}.
+        '''
+        res = did.twfe(data=data, covariates=covariates, data_dict=data_dict)
+        tid = data.loc[data[data_dict['treatment']] == 1,
+                       data_dict['unitid']].iloc[0]
+        rows = res['twfe_c'][res['twfe_c'][data_dict['unitid']] == tid] \
+            .sort_values(data_dict['date'])
+        observed = rows[data_dict['outcome']].to_numpy()
+        counterfactual = rows['y_hat_counterfactual'].to_numpy()
+
+        clean = dgp.clean_and_input_data(dataset=data,
+                                         treatment=data_dict['treatment'],
+                                         unit_id=data_dict['unitid'],
+                                         date=data_dict['date'],
+                                         post=data_dict['post'],
+                                         outcome=data_dict['outcome'])
+        return conformal_inf.conformal_from_trajectory(
+            observed=observed,
+            counterfactual=counterfactual,
+            pre_pst_lengths=clean['pre_pst_lengths'],
+            permutation_list=clean['time_scramble'],
+            theta_grid=theta_grid,
+            alpha=alpha)
 
 
 # In[45]:
@@ -456,6 +495,42 @@ class sdid:
             'se': se,
             'pvalue': pvalue,
         }
+
+    def conformal_inference(data=None,
+                            data_dict={'treatment':None,
+                                       'date':None,
+                                       'post':None,
+                                       'unitid':None,
+                                       'outcome':None},
+                            theta_grid=None,
+                            alpha=0.05):
+        '''
+        Conformal inference for the SDID counterfactual, using the same
+        permutation procedure as the SC models. The treated unit's observed
+        trajectory is compared against the SDID counterfactual (y_c).
+
+        Returns {'real_att', 'ci', 'se', 'pvalue'}, matching the shape of
+        sdid_permutation_inference.
+        '''
+        res = sdid.twfe_sdid(data=data, data_dict=data_dict)
+        cf = res['counterfactual']
+        rows = cf[cf[data_dict['treatment']] == 1].sort_values(data_dict['date'])
+        observed = rows['y_obs'].to_numpy()
+        counterfactual = rows['y_c'].to_numpy()
+
+        clean = dgp.clean_and_input_data(dataset=data,
+                                         treatment=data_dict['treatment'],
+                                         unit_id=data_dict['unitid'],
+                                         date=data_dict['date'],
+                                         post=data_dict['post'],
+                                         outcome=data_dict['outcome'])
+        return conformal_inf.conformal_from_trajectory(
+            observed=observed,
+            counterfactual=counterfactual,
+            pre_pst_lengths=clean['pre_pst_lengths'],
+            permutation_list=clean['time_scramble'],
+            theta_grid=theta_grid,
+            alpha=alpha)
 
     '''
     **Step 1** Estimate the regularization parameter
@@ -1485,7 +1560,57 @@ class conformal_inf:
         return {'theta_list': theta_grid, 'pvalue_list': pv_grid, 'ci_list': ci_list,
                 'ci_interval': ci_interval}
 
-        
+    def conformal_from_trajectory(observed=None,
+                                  counterfactual=None,
+                                  pre_pst_lengths=None,
+                                  permutation_list=None,
+                                  theta_grid=None,
+                                  alpha=0.05):
+        '''
+        Run conformal inference given a single treated unit's observed and
+        counterfactual trajectories (ordered by time, pre-periods first).
+
+        This is the same inference used internally by the SC models, exposed
+        so that DiD and SDID counterfactuals can be put through an identical
+        permutation-based procedure for cross-model consistency.
+
+        Returns a dict matching sdid_permutation_inference:
+            {'real_att', 'ci', 'se', 'pvalue'}
+        where 'real_att' is the mean post-period gap (observed - counterfactual),
+        and 'se' is inferred from the conformal CI half-width.
+        '''
+        observed = np.asarray(observed, dtype=float)
+        counterfactual = np.asarray(counterfactual, dtype=float)
+        if theta_grid is None:
+            theta_grid = np.arange(-10, 10, 0.005)
+
+        n_post = pre_pst_lengths[1]
+        att = float(np.mean((observed - counterfactual)[-n_post:]))
+
+        pvalue = conformal_inf.pvalue_calc(counterfactual=counterfactual.copy(),
+                                           actual=observed.copy(),
+                                           permutation_list=permutation_list,
+                                           pre_pst_lengths=pre_pst_lengths,
+                                           h0=0)
+
+        ci_out = conformal_inf.ci_calc(y_hat=counterfactual.copy(),
+                                       y_act=observed.copy(),
+                                       theta_grid=theta_grid,
+                                       permutation_list_ci=permutation_list,
+                                       pre_pst_lengths_ci=pre_pst_lengths,
+                                       alpha=alpha)
+        ci_lo, ci_hi = ci_out['ci_interval']
+        if np.isnan(ci_lo) or np.isnan(ci_hi):
+            se = float('nan')
+        else:
+            se = (ci_hi - ci_lo) / (2 * 1.96)
+
+        return {'real_att': att,
+                'ci': (float(ci_lo), float(ci_hi)),
+                'se': float(se),
+                'pvalue': float(pvalue)}
+
+
 
 
 # In[ ]:
