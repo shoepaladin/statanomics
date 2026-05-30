@@ -405,45 +405,77 @@ class sdid:
                                  index=[str(t) for t in pre_dates])
 
         '''
-        Output the ATET from the final WLS model, and estimate the counterfactual trend.
+        Compute ATET and counterfactual using the paper formula directly.
+
+        Implements Arkhangelsky et al. (2021) eq. 2 (arxiv:1812.09970):
+
+            tau_sdid = (Y_treat_post_avg - SC_post_avg)
+                       - (sum_t lambda_t * Y_treat_t - sum_t lambda_t * SC_t)
+
+        where SC(t) = sum_i omega_i * Y_i(t)  (omega-weighted control average).
+
+        Equivalently, the counterfactual trajectory for all t is:
+
+            CF(t) = SC(t) + delta_pre
+            delta_pre = sum_t lambda_t * [Y_treat(t) - SC(t)]   (scalar level shift)
+            tau_sdid  = mean over post-period of [Y_treat(t) - CF(t)]
+
+        This is the same formula used by the R synthdid package (plot.R, over=1)
+        and by Python pysynthdid (sdid_trajectory). The earlier WLS regression
+        approach was incorrect because it excluded the treated unit fixed effect,
+        causing the predicted pre-period counterfactual to be flat (and potentially
+        wrong-signed) when lambda weights are concentrated on few periods.
         '''
-        ## Construct the TWFE design matrix with time and unit fixed effects.
-        treated_na_replace = dict(zip(treated_units, [np.nan]*N_tr))
-        t_fe = pd.get_dummies(data[data_dict['date']], drop_first=True).astype(float)
-        x_fe = pd.get_dummies(data[data_dict['unitid']].replace(to_replace=treated_na_replace),
-                              drop_first=True, dummy_na=False).astype(float)
+        all_dates_sorted = sorted(data[data_dict['date']].unique())
 
-        post_treated = pd.DataFrame(
-            data={'post_SDiD':
-            (data[data_dict['post']] * (data[data_dict['unitid']].isin(treated_units))).astype(float)})
+        ## Omega-weighted synthetic control at every time period
+        pivot_c = (data[data[data_dict['unitid']].isin(control_units)]
+                   .pivot_table(index=data_dict['date'],
+                                columns=data_dict['unitid'],
+                                values=data_dict['outcome'])
+                   .reindex(all_dates_sorted))[control_units]
+        sc_avg = pivot_c.values @ omega_sdid          # shape (T_total,)
+        sc_times = np.array(all_dates_sorted)
 
-        twfe_X = sm.add_constant(pd.concat([post_treated, t_fe, x_fe], axis=1))
+        ## Treated unit trajectory (average over treated units if N_tr > 1)
+        y_treat_all = (data[data[data_dict['unitid']].isin(treated_units)]
+                       .groupby(data_dict['date'])[data_dict['outcome']]
+                       .mean()
+                       .reindex(all_dates_sorted)
+                       .values)
 
-        ## Fit WLS using the per-observation SDID weights (omega_i * lambda_t).
-        twfe_model = sm.WLS(data[data_dict['outcome']], twfe_X, weights=obs_weights).fit()
-        twfe_coef = twfe_model.params.iloc[0:2]
-        twfe_se = twfe_model.bse.iloc[0:2]
-        twfe_pvalues = twfe_model.pvalues.iloc[0:2]
+        ## Delta_pre: lambda-weighted pre-period gap (scalar level shift)
+        pre_bool  = np.isin(sc_times, pre_dates)
+        post_bool = np.isin(sc_times, pst_dates)
+        delta_pre = float(np.dot(lambda_sdid,
+                                 y_treat_all[pre_bool] - sc_avg[pre_bool]))
 
-        df_twfe = pd.DataFrame()
-        for r, coef_, se_, pv_ in zip(twfe_coef.index, twfe_coef, twfe_se, twfe_pvalues):
-            df_twfe = pd.concat([df_twfe,
-                                 pd.DataFrame(index=[r],
-                                              data={'coef_': coef_, 'se_': se_, 'pvalue': pv_})])
+        ## Counterfactual for all t and ATT
+        cf_all   = sc_avg + delta_pre
+        atet_hat = float(np.mean(y_treat_all[post_bool] - cf_all[post_bool]))
 
-        ## Predict counterfactual values in original (unweighted) outcome scale.
-        atet_hat = df_twfe['coef_']['post_SDiD']
-        c_df = pd.DataFrame()
-        c_df['y_hat'] = twfe_model.predict(twfe_X)
-        c_df[data_dict['date']] = data[data_dict['date']].values
-        c_df[data_dict['unitid']] = data[data_dict['unitid']].values
-        c_df[data_dict['treatment']] = data[data_dict['treatment']].values
-        c_df['post_SDiD'] = (data[data_dict['post']] *
-                             (data[data_dict['unitid']].isin(treated_units))).astype(float)
-        c_df['y_c'] = c_df['y_hat'] - c_df['post_SDiD'] * atet_hat
-        c_df['y_obs'] = data[data_dict['outcome']].values
-        c_df['stder'] = df_twfe['se_']['post_SDiD']
-        return {'sdid': df_twfe, 'sdid_model': twfe_model,
+        ## Output dataframe – keeps same index/column shape as before
+        df_twfe = pd.DataFrame(
+            index=['post_SDiD'],
+            data={'coef_': atet_hat, 'se_': np.nan, 'pvalue': np.nan})
+
+        ## Counterfactual dataframe (all rows, matching original column names)
+        c_df = data[[data_dict['date'], data_dict['unitid'],
+                     data_dict['treatment'],
+                     data_dict['outcome']]].copy().reset_index(drop=True)
+        c_df = c_df.rename(columns={data_dict['outcome']: 'y_obs'})
+        date_to_cf = dict(zip(sc_times, cf_all))
+        c_df['y_c'] = c_df.apply(
+            lambda row: date_to_cf[row[data_dict['date']]]
+                        if row[data_dict['treatment']] == 1 else row['y_obs'],
+            axis=1)
+        c_df['post_SDiD'] = (
+            data[data_dict['post']].values *
+            data[data_dict['unitid']].isin(treated_units).values
+        ).astype(float)
+        c_df['stder'] = np.nan
+
+        return {'sdid': df_twfe, 'sdid_model': None,
                 'omega_weights': omega_df, 'lambda_weights': lambda_df,
                 'counterfactual': c_df}
 
