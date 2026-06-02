@@ -36,8 +36,13 @@ import numpy as np
 import os as os 
 
 import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-from IPython.display import display    
+try:
+    _ipy = get_ipython()
+    if _ipy is not None:
+        _ipy.run_line_magic('matplotlib', 'inline')
+except NameError:
+    pass
+from IPython.display import display
 
 # %load_ext nb_js_diagrammers
 
@@ -282,12 +287,51 @@ class did:
 
         
         
-        return {'twfe':df_twfe, 
+        return {'twfe':df_twfe,
                 'twfe_c': df_c,
                 'twfe_model':twfe_model,
                 'event_study':pd.concat([event_pre_df, event_pst_df]),
                 'event_study_c':df_event_study_c,
                'event_study_model':event_model}
+
+    def conformal_inference(data=None,
+                            covariates=[],
+                            data_dict={'treatment':None,
+                                       'date':None,
+                                       'post':None,
+                                       'unitid':None,
+                                       'outcome':None},
+                            theta_grid=None,
+                            alpha=0.05):
+        '''
+        Conformal inference for the DiD (TWFE) counterfactual, using the same
+        permutation procedure as the SC models. The treated unit's observed
+        trajectory is compared against the TWFE counterfactual; pre-period
+        misfit (e.g. under a parallel-trends violation) widens the interval.
+
+        Returns {'real_att', 'ci', 'se', 'pvalue'}.
+        '''
+        res = did.twfe(data=data, covariates=covariates, data_dict=data_dict)
+        tid = data.loc[data[data_dict['treatment']] == 1,
+                       data_dict['unitid']].iloc[0]
+        rows = res['twfe_c'][res['twfe_c'][data_dict['unitid']] == tid] \
+            .sort_values(data_dict['date'])
+        observed = rows[data_dict['outcome']].to_numpy()
+        counterfactual = rows['y_hat_counterfactual'].to_numpy()
+
+        clean = dgp.clean_and_input_data(dataset=data,
+                                         treatment=data_dict['treatment'],
+                                         unit_id=data_dict['unitid'],
+                                         date=data_dict['date'],
+                                         post=data_dict['post'],
+                                         outcome=data_dict['outcome'])
+        return conformal_inf.conformal_from_trajectory(
+            observed=observed,
+            counterfactual=counterfactual,
+            pre_pst_lengths=clean['pre_pst_lengths'],
+            permutation_list=clean['time_scramble'],
+            theta_grid=theta_grid,
+            alpha=alpha)
 
 
 # In[45]:
@@ -358,53 +402,170 @@ class sdid:
         ## Write the omega and lambda weights for inspection:
         omega_df = pd.DataFrame({'omega': omega_sdid}, index=control_units)
         lambda_df = pd.DataFrame({'lambda': lambda_sdid},
-                                 index=[pd.to_datetime(t).strftime("%Y-%m-%d") for t in pre_dates])
+                                 index=[str(t) for t in pre_dates])
 
         '''
-        Output the ATET from the final WLS model, and estimate the counterfactual trend.
+        Compute ATET and counterfactual using the paper formula directly.
+
+        Implements Arkhangelsky et al. (2021) eq. 2 (arxiv:1812.09970):
+
+            tau_sdid = (Y_treat_post_avg - SC_post_avg)
+                       - (sum_t lambda_t * Y_treat_t - sum_t lambda_t * SC_t)
+
+        where SC(t) = sum_i omega_i * Y_i(t)  (omega-weighted control average).
+
+        Equivalently, the counterfactual trajectory for all t is:
+
+            CF(t) = SC(t) + delta_pre
+            delta_pre = sum_t lambda_t * [Y_treat(t) - SC(t)]   (scalar level shift)
+            tau_sdid  = mean over post-period of [Y_treat(t) - CF(t)]
+
+        This is the same formula used by the R synthdid package (plot.R, over=1)
+        and by Python pysynthdid (sdid_trajectory). The earlier WLS regression
+        approach was incorrect because it excluded the treated unit fixed effect,
+        causing the predicted pre-period counterfactual to be flat (and potentially
+        wrong-signed) when lambda weights are concentrated on few periods.
         '''
-        ## Construct the TWFE design matrix with time and unit fixed effects.
-        treated_na_replace = dict(zip(treated_units, [np.nan]*N_tr))
-        t_fe = pd.get_dummies(data[data_dict['date']], drop_first=True).astype(float)
-        x_fe = pd.get_dummies(data[data_dict['unitid']].replace(to_replace=treated_na_replace),
-                              drop_first=True, dummy_na=False).astype(float)
+        all_dates_sorted = sorted(data[data_dict['date']].unique())
 
-        post_treated = pd.DataFrame(
-            data={'post_SDiD':
-            (data[data_dict['post']] * (data[data_dict['unitid']].isin(treated_units))).astype(float)})
+        ## Omega-weighted synthetic control at every time period
+        pivot_c = (data[data[data_dict['unitid']].isin(control_units)]
+                   .pivot_table(index=data_dict['date'],
+                                columns=data_dict['unitid'],
+                                values=data_dict['outcome'])
+                   .reindex(all_dates_sorted))[control_units]
+        sc_avg = pivot_c.values @ omega_sdid          # shape (T_total,)
+        sc_times = np.array(all_dates_sorted)
 
-        twfe_X = sm.add_constant(pd.concat([post_treated, t_fe, x_fe], axis=1))
+        ## Treated unit trajectory (average over treated units if N_tr > 1)
+        y_treat_all = (data[data[data_dict['unitid']].isin(treated_units)]
+                       .groupby(data_dict['date'])[data_dict['outcome']]
+                       .mean()
+                       .reindex(all_dates_sorted)
+                       .values)
 
-        ## Fit WLS using the per-observation SDID weights (omega_i * lambda_t).
-        twfe_model = sm.WLS(data[data_dict['outcome']], twfe_X, weights=obs_weights).fit()
-        twfe_coef = twfe_model.params.iloc[0:2]
-        twfe_se = twfe_model.bse.iloc[0:2]
-        twfe_pvalues = twfe_model.pvalues.iloc[0:2]
+        ## Delta_pre: lambda-weighted pre-period gap (scalar level shift)
+        pre_bool  = np.isin(sc_times, pre_dates)
+        post_bool = np.isin(sc_times, pst_dates)
+        delta_pre = float(np.dot(lambda_sdid,
+                                 y_treat_all[pre_bool] - sc_avg[pre_bool]))
 
-        df_twfe = pd.DataFrame()
-        for r, coef_, se_, pv_ in zip(twfe_coef.index, twfe_coef, twfe_se, twfe_pvalues):
-            df_twfe = pd.concat([df_twfe,
-                                 pd.DataFrame(index=[r],
-                                              data={'coef_': coef_, 'se_': se_, 'pvalue': pv_})])
+        ## Counterfactual for all t and ATT
+        cf_all   = sc_avg + delta_pre
+        atet_hat = float(np.mean(y_treat_all[post_bool] - cf_all[post_bool]))
 
-        ## Predict counterfactual values in original (unweighted) outcome scale.
-        atet_hat = df_twfe['coef_']['post_SDiD']
-        c_df = pd.DataFrame()
-        c_df['y_hat'] = twfe_model.predict(twfe_X)
-        c_df[data_dict['date']] = data[data_dict['date']].values
-        c_df[data_dict['unitid']] = data[data_dict['unitid']].values
-        c_df[data_dict['treatment']] = data[data_dict['treatment']].values
-        c_df['post_SDiD'] = (data[data_dict['post']] *
-                             (data[data_dict['unitid']].isin(treated_units))).astype(float)
-        c_df['y_c'] = c_df['y_hat'] - c_df['post_SDiD'] * atet_hat
-        c_df['y_obs'] = data[data_dict['outcome']].values
-        c_df['stder'] = df_twfe['se_']['post_SDiD']
-        return {'sdid': df_twfe, 'sdid_model': twfe_model,
+        ## Output dataframe – keeps same index/column shape as before
+        df_twfe = pd.DataFrame(
+            index=['post_SDiD'],
+            data={'coef_': atet_hat, 'se_': np.nan, 'pvalue': np.nan})
+
+        ## Counterfactual dataframe (all rows, matching original column names)
+        c_df = data[[data_dict['date'], data_dict['unitid'],
+                     data_dict['treatment'],
+                     data_dict['outcome']]].copy().reset_index(drop=True)
+        c_df = c_df.rename(columns={data_dict['outcome']: 'y_obs'})
+        date_to_cf = dict(zip(sc_times, cf_all))
+        c_df['y_c'] = c_df.apply(
+            lambda row: date_to_cf[row[data_dict['date']]]
+                        if row[data_dict['treatment']] == 1 else row['y_obs'],
+            axis=1)
+        c_df['post_SDiD'] = (
+            data[data_dict['post']].values *
+            data[data_dict['unitid']].isin(treated_units).values
+        ).astype(float)
+        c_df['stder'] = np.nan
+
+        return {'sdid': df_twfe, 'sdid_model': None,
                 'omega_weights': omega_df, 'lambda_weights': lambda_df,
                 'counterfactual': c_df}
-    
+
+    def sdid_permutation_inference(data=None,
+                                   data_dict={'treatment': None, 'date': None,
+                                              'post': None, 'unitid': None, 'outcome': None},
+                                   n_placebo=None,
+                                   seed=0):
+        """
+        Permutation inference for SDID.
+        Assigns fake treatment to each of n_placebo control units in turn,
+        re-estimates SDID, and uses the resulting null distribution to build
+        a p-value and SE-based confidence interval around the real ATT.
+        """
+        real_result = sdid.twfe_sdid(data=data, data_dict=data_dict)
+        real_att = float(real_result['sdid'].loc['post_SDiD', 'coef_'])
+
+        treated_ids = data.loc[data[data_dict['treatment']] == 1,
+                               data_dict['unitid']].unique()
+        control_ids = data.loc[data[data_dict['treatment']] == 0,
+                               data_dict['unitid']].unique()
+
+        if n_placebo is None:
+            n_placebo = min(20, len(control_ids))
+
+        rng_ = np.random.default_rng(seed)
+        chosen = rng_.choice(control_ids, size=n_placebo, replace=False)
+
+        placebo_atts = []
+        for pu in chosen:
+            df_p = data[~data[data_dict['unitid']].isin(treated_ids)].copy()
+            df_p[data_dict['treatment']] = (
+                df_p[data_dict['unitid']] == pu).astype(int)
+            try:
+                pr = sdid.twfe_sdid(data=df_p, data_dict=data_dict)
+                placebo_atts.append(float(pr['sdid'].loc['post_SDiD', 'coef_']))
+            except Exception:
+                pass
+
+        placebo_atts = np.array(placebo_atts)
+        se = float(np.std(placebo_atts, ddof=1)) if len(placebo_atts) > 1 else float('nan')
+        pvalue = float(np.mean(np.abs(placebo_atts) >= np.abs(real_att)))
+        ci_lower = real_att - 1.96 * se
+        ci_upper = real_att + 1.96 * se
+
+        return {
+            'real_att': real_att,
+            'ci': (float(ci_lower), float(ci_upper)),
+            'se': se,
+            'pvalue': pvalue,
+        }
+
+    def conformal_inference(data=None,
+                            data_dict={'treatment':None,
+                                       'date':None,
+                                       'post':None,
+                                       'unitid':None,
+                                       'outcome':None},
+                            theta_grid=None,
+                            alpha=0.05):
+        '''
+        Conformal inference for the SDID counterfactual, using the same
+        permutation procedure as the SC models. The treated unit's observed
+        trajectory is compared against the SDID counterfactual (y_c).
+
+        Returns {'real_att', 'ci', 'se', 'pvalue'}, matching the shape of
+        sdid_permutation_inference.
+        '''
+        res = sdid.twfe_sdid(data=data, data_dict=data_dict)
+        cf = res['counterfactual']
+        rows = cf[cf[data_dict['treatment']] == 1].sort_values(data_dict['date'])
+        observed = rows['y_obs'].to_numpy()
+        counterfactual = rows['y_c'].to_numpy()
+
+        clean = dgp.clean_and_input_data(dataset=data,
+                                         treatment=data_dict['treatment'],
+                                         unit_id=data_dict['unitid'],
+                                         date=data_dict['date'],
+                                         post=data_dict['post'],
+                                         outcome=data_dict['outcome'])
+        return conformal_inf.conformal_from_trajectory(
+            observed=observed,
+            counterfactual=counterfactual,
+            pre_pst_lengths=clean['pre_pst_lengths'],
+            permutation_list=clean['time_scramble'],
+            theta_grid=theta_grid,
+            alpha=alpha)
+
     '''
-    **Step 1** Estimate the regularization parameter    
+    **Step 1** Estimate the regularization parameter
     '''
     
     def comp_reg_parameter(data_control_pre=None,
@@ -942,12 +1103,83 @@ class dgp:
                                                                          time_unit=date,
                                                                          post=post)
                 
-        return {'C_pre':C_pre, 'C_pst':C_pst, 'T_pre':T_pre, 'T_pst':T_pst, 
+        return {'C_pre':C_pre, 'C_pst':C_pst, 'T_pre':T_pre, 'T_pst':T_pst,
                 'time_scramble':permutations_subset_block[0],
                'pre_pst_lengths':permutations_subset_block[1]}
-        
 
-    
+    def simulate_panel(seed=42, T_pre=20, T_post=5, N_control=30,
+                       noise_sd=0.1, att_pct=0.15, sigma_lambda=0.0, rho=0.8):
+        """
+        Simulate a balanced panel with one treated unit and N_control control units.
+
+        Parameters
+        ----------
+        sigma_lambda : float
+            Std-dev of unit-specific time trends. 0 → parallel trends holds.
+        rho : float
+            AR(1) coefficient for the common time trend (0 = white noise,
+            <1 = stationary, 1 = random walk). The trend is initialised at
+            its stationary variance so there is no burn-in bias.
+
+        Returns
+        -------
+        (df, true_att) : tuple
+            df has columns [unit_id, time, treated, post, y].
+            true_att is the true average treatment effect on the treated.
+            The treatment effect is added to the baseline AFTER the full
+            AR(1) trend is generated, so it is not subject to the AR process.
+        """
+        rng_ = np.random.default_rng(seed)
+        N_total = N_control + 1          # last index is the treated unit
+        T_total = T_pre + T_post
+
+        # Unit fixed effects — drawn positive so pre-period means are positive
+        alpha_i = rng_.uniform(1.0, 3.0, N_total)
+
+        # Common time trend: AR(1) with coefficient rho.
+        # Innovations ~ N(0, 0.09); initialised at stationary variance
+        # so the series has consistent scale regardless of rho.
+        sigma_eta = 0.3
+        eta = rng_.standard_normal(T_total) * sigma_eta
+        delta_t = np.zeros(T_total)
+        # Stationary initialisation: Var(delta) = sigma_eta^2 / (1 - rho^2)
+        init_sd = sigma_eta / np.sqrt(1.0 - rho ** 2) if abs(rho) < 1 else sigma_eta
+        delta_t[0] = rng_.standard_normal() * init_sd
+        for t in range(1, T_total):
+            delta_t[t] = rho * delta_t[t - 1] + eta[t]
+
+        # Unit-specific time trends (0 when sigma_lambda=0 → parallel trends)
+        lambda_i = rng_.standard_normal(N_total) * sigma_lambda
+
+        rows = []
+        for i in range(N_total):
+            is_treated_unit = (i == N_total - 1)
+            for t in range(T_total):
+                is_post = int(t >= T_pre)
+                y = (alpha_i[i] + delta_t[t]
+                     + lambda_i[i] * t
+                     + rng_.standard_normal() * noise_sd)
+                rows.append({
+                    'unit_id': f'u{i:03d}',
+                    'time':    t,
+                    'treated': int(is_treated_unit),
+                    'post':    is_post,
+                    '_base_y': y,
+                })
+
+        df = pd.DataFrame(rows)
+
+        treat_pre_mean = df.loc[
+            (df['treated'] == 1) & (df['post'] == 0), '_base_y'].mean()
+        true_att = att_pct * abs(treat_pre_mean)
+
+        df['y'] = df['_base_y'].copy()
+        df.loc[(df['treated'] == 1) & (df['post'] == 1), 'y'] += true_att
+        df.drop(columns=['_base_y'], inplace=True)
+
+        return df, true_att
+
+
 
 
 # In[47]:
@@ -1375,7 +1607,57 @@ class conformal_inf:
         return {'theta_list': theta_grid, 'pvalue_list': pv_grid, 'ci_list': ci_list,
                 'ci_interval': ci_interval}
 
-        
+    def conformal_from_trajectory(observed=None,
+                                  counterfactual=None,
+                                  pre_pst_lengths=None,
+                                  permutation_list=None,
+                                  theta_grid=None,
+                                  alpha=0.05):
+        '''
+        Run conformal inference given a single treated unit's observed and
+        counterfactual trajectories (ordered by time, pre-periods first).
+
+        This is the same inference used internally by the SC models, exposed
+        so that DiD and SDID counterfactuals can be put through an identical
+        permutation-based procedure for cross-model consistency.
+
+        Returns a dict matching sdid_permutation_inference:
+            {'real_att', 'ci', 'se', 'pvalue'}
+        where 'real_att' is the mean post-period gap (observed - counterfactual),
+        and 'se' is inferred from the conformal CI half-width.
+        '''
+        observed = np.asarray(observed, dtype=float)
+        counterfactual = np.asarray(counterfactual, dtype=float)
+        if theta_grid is None:
+            theta_grid = np.arange(-10, 10, 0.005)
+
+        n_post = pre_pst_lengths[1]
+        att = float(np.mean((observed - counterfactual)[-n_post:]))
+
+        pvalue = conformal_inf.pvalue_calc(counterfactual=counterfactual.copy(),
+                                           actual=observed.copy(),
+                                           permutation_list=permutation_list,
+                                           pre_pst_lengths=pre_pst_lengths,
+                                           h0=0)
+
+        ci_out = conformal_inf.ci_calc(y_hat=counterfactual.copy(),
+                                       y_act=observed.copy(),
+                                       theta_grid=theta_grid,
+                                       permutation_list_ci=permutation_list,
+                                       pre_pst_lengths_ci=pre_pst_lengths,
+                                       alpha=alpha)
+        ci_lo, ci_hi = ci_out['ci_interval']
+        if np.isnan(ci_lo) or np.isnan(ci_hi):
+            se = float('nan')
+        else:
+            se = (ci_hi - ci_lo) / (2 * 1.96)
+
+        return {'real_att': att,
+                'ci': (float(ci_lo), float(ci_hi)),
+                'se': float(se),
+                'pvalue': float(pvalue)}
+
+
 
 
 # In[ ]:
