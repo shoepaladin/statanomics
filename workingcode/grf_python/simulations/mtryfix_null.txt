@@ -1,3 +1,7 @@
 High-rep confirmation (grf-faithful config), reps=150
 Calibrated if 95% CI brackets 0.05.
 n=  400 B=  200 reps=150 | FPR=0.056  95%CI=[0.036,0.076]  SE/MC=1.163  [OK ]
+n=  400 B= 1000 reps=150 | FPR=0.060  95%CI=[0.041,0.079]  SE/MC=1.086  [OK ]
+n=  800 B=  200 reps=150 | FPR=0.035  95%CI=[0.020,0.049]  SE/MC=1.335  [LOW ]
+n=  800 B= 1000 reps=150 | FPR=0.055  95%CI=[0.037,0.072]  SE/MC=1.118  [OK ]
+Done.

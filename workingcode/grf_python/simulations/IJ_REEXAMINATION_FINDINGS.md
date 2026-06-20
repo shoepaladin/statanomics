@@ -262,15 +262,49 @@ it shows up only once the ObjectiveBayes cushion has decayed (large B) and the
 sample is small.  At the practical operating point (B <= 200) the cushion keeps
 coverage calibrated-to-conservative.
 
+## Addendum 4 — the `mtry` bug (resolves BOTH the non-null gap and n=400/B=1000)
+
+A later code audit (non-null DGP, which the null-only work above could not see)
+found the actual culprit behind the residual issues: the `mtry` default was
+`ceil(p/3)`, which the code claimed "matches R grf" but does not.  R `grf`'s
+default is `min(p, ceil(sqrt(p) + 20))` (= all features for p<=~22), verified
+against grf 2.6.1.  `ceil(p/3)` (e.g. 2 of 5 features) starves splits of the
+relevant covariate.
+
+On identical data (n=800, tau(x)=x0, B=2000), benchmarked against R grf:
+
+```
+                  slope   coverage   mean|err|
+ ours, mtry=2     0.61     0.57       0.285     (heavily attenuated)
+ R grf            0.76     0.77       0.189
+ ours, mtry fix   0.84     0.85       0.154     (matches/beats grf)
+```
+
+Crucially the fix ALSO removes the n=400/B=1000 null anti-conservatism that
+Addendum 3 attributed to "inherent finite-n heavy tails" — that diagnosis was
+wrong; it was under-splitting.  Null recheck after the fix (150 reps):
+
+```
+ n=400 B=200   5.6%  CI[3.6, 7.6]   OK
+ n=400 B=1000  6.0%  CI[4.1, 7.9]   OK    (was 8.8% HIGH before the fix)
+ n=800 B=200   3.5%  CI[2.0, 4.9]   conservative
+ n=800 B=1000  5.5%  CI[3.7, 7.2]   OK
+```
+
+So with the correct grf `mtry`, every cell is calibrated or conservative, and
+non-null accuracy matches R grf.  Lesson: null-only validation cannot detect
+estimation bias (attenuation toward 0 is harmless under tau=0); non-null
+coverage / slope-vs-truth must be part of the test suite
+(`tests/test_phase1_correctness.py::TestNonNullCalibration`).
+
 ## Recommendation
 
 * **Default to BLB** (`variance='blb'`) with grf defaults (`subforest_size=2`,
-  `subsample_ratio=0.5`) and grf's OOB regression-forest nuisance — a faithful
-  R `grf` replication.  Calibrated at B<=200 across n; calibrated at large B
-  for n>=800.
+  `subsample_ratio=0.5`), grf's OOB regression-forest nuisance, and the grf
+  `mtry = min(p, ceil(sqrt(p)+20))` default — a faithful R `grf` replication.
+* With the `mtry` fix (Addendum 4), null FPR is calibrated/conservative across
+  the n x B grid (no remaining anti-conservative cell), and non-null accuracy
+  and coverage match/beat R `grf` on identical data.
 * Keep `delta` and `ij` available for comparison.
-* The only residual miscalibration (small n, very large B: ~9% at n=400/B=1000)
-  is a finite-n heavy-tail effect with correct mean SE, inherent to GRF normal
-  CIs and shared by R `grf` — not a variance-estimator, cushion, or nuisance
-  bug (all ruled out).  If tighter small-n coverage is ever needed, the lever
-  is the CI *quantile* (e.g. a t-style / fatter quantile), not the variance.
+* Always validate with a **non-null** DGP (slope-vs-truth + coverage), not just
+  null FPR: null-only tests cannot see estimation bias.
