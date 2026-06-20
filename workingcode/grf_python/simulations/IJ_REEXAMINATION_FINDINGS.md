@@ -176,11 +176,28 @@ forests relax toward the uncushioned estimate. R `grf` exhibits the same.
 (Captured by `tests/test_blb_variance.py::test_core_formula_is_scale_invariant_in_group_size`.)
 
 **Defaults aligned to grf:** `subforest_size` 4 → **2** (`ci.group.size`),
-`subsample_ratio` 0.45 → **0.5** (`sample.fraction`).
+`subsample_ratio` 0.45 → **0.5** (`sample.fraction`).  This is not cosmetic —
+it materially improves calibration (`simulations/grf_defaults_bsweep.py`,
+30 reps, null DGP):
 
-The residual large-B anti-conservatism at mid n (e.g. n=400) is therefore not a
-variance-scaling bug; it is the gap between our externally cross-fitted DML
-nuisance step and grf's *internal* local centering — the documented follow-up.
+```
+                        FPR     SE/MC    groups
+n=400  B=50    0.027   1.356     25       (was 6.5% at subforest_size=4)
+n=400  B=200   0.053   1.140    100       (was 9.5%)
+n=400  B=1000  0.067   0.969    500       (was 12.0%)
+n=800  B=50    0.000   1.562     25
+n=800  B=200   0.047   1.304    100       (was 4.5%)
+n=800  B=1000  0.060   1.115    500       (was 8.5%)
+```
+
+The B-effect (FPR drifting up with B) persists but is now mild, and the
+large-B values sit at 6–7% rather than 8–12%.  The drift is the grf
+ObjectiveBayes cushion relaxing as groups accumulate (`sqrt(2/num_groups)`);
+small forests are deliberately conservative (n=800/B=50 → 0% at just 25
+groups).  The remaining few points of large-B anti-conservatism at mid n are
+the gap between our externally cross-fitted DML nuisance step and grf's
+*internal* local centering — the documented follow-up, not a variance-scaling
+bug.
 
 ## Recommendation
 
