@@ -261,6 +261,11 @@ class NumbaCausalForest:
         return self
 
     def _validate_inputs(self, X, Y, W):
+        if self.variance not in ('blb', 'delta', 'ij'):
+            raise ValueError(
+                f"Unknown variance method {self.variance!r}; "
+                "expected 'blb', 'delta', or 'ij'."
+            )
         if X.ndim != 2:
             raise ValueError(f"X must be 2-D, got shape {X.shape}")
         n = X.shape[0]
@@ -372,6 +377,9 @@ class NumbaCausalForest:
             'random_state': int(self._rng.integers(0, 2**31)),
         }
         rf_Y = RandomForestRegressor(**rf_params).fit(X, Y)
+        # Independent randomness for the W forest (distinct bootstraps/feature
+        # draws) rather than reusing the Y forest's seed.
+        rf_params['random_state'] = int(self._rng.integers(0, 2**31))
         rf_W = RandomForestRegressor(**rf_params).fit(X, W)
         Y_hat = rf_Y.oob_prediction_
         W_hat = rf_W.oob_prediction_
@@ -393,14 +401,12 @@ class NumbaCausalForest:
 
     def predict(self, X, return_std=False):
         """
-        Predict CATEs.
+        Predict CATEs (and, if ``return_std``, standard errors).
 
-        Uses batch JIT-compiled tree traversal instead of per-point
-        Python while-loops, and delta-method variance for inference.
-
-        Variance formula: V(x) = sigma^2 * sum_j Omega_j(x)^2
-        where Omega_j(x) = (1/B) sum_b [W_resid_j / sum_k W_resid_k^2]
-        for k in est_leaf_b(x), and sigma^2 = mean(Y_resid^2).
+        Uses batch JIT-compiled tree traversal instead of per-point Python
+        while-loops.  When ``return_std`` is set, the standard error is computed
+        by the configured ``variance`` estimator (default 'blb' — the R grf
+        bootstrap-of-little-bags; see ``_compute_variance``).
         """
         if not hasattr(self, 'trees'):
             raise RuntimeError("Call fit() before predict()")

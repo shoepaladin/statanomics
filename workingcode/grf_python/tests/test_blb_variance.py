@@ -147,9 +147,10 @@ class TestVarianceMethods:
     def test_unknown_method_raises(self, null_data):
         X, Y, W = null_data
         f = NumbaCausalForest(n_trees=8, subforest_size=4, variance='nope',
-                              n_jobs=1, random_state=5).fit(X, Y, W)
+                              n_jobs=1, random_state=5)
+        # validated early, at fit time
         with pytest.raises(ValueError):
-            f.predict(X[:5], return_std=True)
+            f.fit(X, Y, W)
 
     def test_blb_null_calibration_smoke(self):
         """
