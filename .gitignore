@@ -8,3 +8,4 @@ __pycache__/
 *.pyo
 .pytest_cache/
 *.egg-info/
+workingcode/panelmodels/__pycache__/
