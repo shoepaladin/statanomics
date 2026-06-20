@@ -1,0 +1,5 @@
+econml n=400 B=  48 | FPR=0.090  SE/MC=1.086
+econml n=400 B= 200 | FPR=0.060  SE/MC=0.998
+econml n=400 B=1000 | FPR=0.085  SE/MC=0.949
+econml n=800 B=  48 | FPR=0.025  SE/MC=1.319
+econml n=800 B= 200 | FPR=0.085  SE/MC=1.187

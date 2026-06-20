@@ -53,6 +53,9 @@ class NumbaCausalForest:
     ----------
     n_trees : int
     subsample_ratio : float
+        Per-tree subsample size as a fraction of n (grf `sample.fraction`,
+        default 0.5).  Each tree subsamples this fraction of n from its
+        group's half-sample; at 0.5 that is the entire half (the grf default).
     min_leaf_size : int
     max_depth : int
     mtry : int or None
@@ -66,6 +69,15 @@ class NumbaCausalForest:
         Cross-fitting folds for nuisance estimation (default 5, was 2).
     honesty_fraction : float
         Fraction of subsample used for determining splits (default 0.5).
+    subforest_size : int
+        Trees per "little bag" for BLB variance (grf `ci.group.size`,
+        default 2).  Bag-mates share one half-sample; between-bag variance
+        gives the calibrated CI.  n_trees is rounded down to a multiple of it.
+    variance : {'blb', 'delta', 'ij'}
+        Variance estimator for predict(return_std=True) / predict_interval.
+        'blb' (default) replicates R grf / econml.grf (bootstrap of little
+        bags + objective-Bayes debiasing).  'delta' is the delta-method SE;
+        'ij' is the bias-corrected infinitesimal jackknife.
     use_parallel : bool
         Parallel feature search within each tree.
     n_jobs : int or 'auto'
@@ -81,11 +93,11 @@ class NumbaCausalForest:
     random_state : int or None
     """
 
-    def __init__(self, n_trees=100, subsample_ratio=0.45,
+    def __init__(self, n_trees=100, subsample_ratio=0.5,
                  min_leaf_size=10, max_depth=10,
                  mtry=None, n_quantiles=20,
                  n_folds=4, honesty_fraction=0.5,
-                 subforest_size=4, variance='blb',
+                 subforest_size=2, variance='blb',
                  use_parallel=True, n_jobs='auto',
                  verbose=0, random_state=None):
         self.n_trees = n_trees

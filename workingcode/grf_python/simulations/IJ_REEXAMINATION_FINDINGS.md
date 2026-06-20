@@ -125,6 +125,63 @@ B→∞ the Monte-Carlo noise vanishes and the forest-only variance converges to
 limit that slightly undercounts nuisance uncertainty at finite n. The same
 effect was documented for the delta method in `b_effect_results.txt`.
 
+## Addendum — auditing the BLB scaling against R `grf` (the target package)
+
+Follow-up concern: "increasing B increases FPR" looks like a denominator bug
+(within-bag noise divided by B instead of by trees-per-bag k). We audited
+`compute_blb_variance` line-by-line against R `grf` master.
+
+**The variance function is a faithful port of grf.** grf's
+`RegressionPredictionStrategy::compute_variance` computes:
+
+```cpp
+var_between = rho_grouped_squared / num_good_groups;
+var_total   = rho_squared / (num_good_groups * ci_group_size);
+group_noise = (var_total - var_between) / (ci_group_size - 1);   // ÷ (k-1), NOT B
+var_debiased = bayes_debiaser.debias(var_between, group_noise, num_good_groups);
+```
+
+and `ObjectiveBayesDebiaser::debias`:
+
+```cpp
+initial_estimate = var_between - group_noise;
+initial_se   = max(var_between, group_noise) * sqrt(2.0 / num_good_groups);
+ratio        = initial_estimate / initial_se;
+numerator    = exp(-ratio^2/2) / sqrt(2pi);
+denominator  = 0.5 * erfc(-ratio / sqrt2);
+return initial_estimate + initial_se * numerator / denominator;
+```
+
+Our `compute_blb_variance` matches both, term for term (the within correction
+divides by `L-1 = ci_group_size-1`; the cushion divides by the number of
+groups, not B). grf's two-level CI sampling is also replicated: per group draw
+one half-sample (fraction 0.5), then each of the `ci_group_size` trees
+subsamples `sample_fraction*2` of that half (= `sample_fraction*n`; with the
+grf default `sample.fraction=0.5` every tree uses the whole half).
+
+**So there is no denominator bug.** A deterministic synthetic test (true
+between-bag var = 0.25, large within-bag noise) confirms the *core* estimate is
+scale-invariant once the cushion is negligible:
+
+```
+G=400 (cushion ~0):   L=2 -> 0.292,  L=4 -> 0.250,  L=50 -> 0.249   (true 0.25)
+G=20  (cushion large): L=2 -> 0.785,  L=4 -> 0.444,  L=50 -> 0.236
+```
+
+The B-dependence is entirely grf's **ObjectiveBayesDebiaser cushion**, which is
+`max(var_between, group_noise) * sqrt(2/num_good_groups)`: large when there are
+few groups (small B), vanishing as groups accumulate. So "FPR rises with B" is
+grf's *designed* behavior — small forests are deliberately conservative; large
+forests relax toward the uncushioned estimate. R `grf` exhibits the same.
+(Captured by `tests/test_blb_variance.py::test_core_formula_is_scale_invariant_in_group_size`.)
+
+**Defaults aligned to grf:** `subforest_size` 4 → **2** (`ci.group.size`),
+`subsample_ratio` 0.45 → **0.5** (`sample.fraction`).
+
+The residual large-B anti-conservatism at mid n (e.g. n=400) is therefore not a
+variance-scaling bug; it is the gap between our externally cross-fitted DML
+nuisance step and grf's *internal* local centering — the documented follow-up.
+
 ## Recommendation
 
 * **Default to BLB** (`variance='blb'`) — it is the estimator GRF actually

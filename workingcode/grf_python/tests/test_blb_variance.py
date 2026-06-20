@@ -83,6 +83,34 @@ class TestComputeBLBVariance:
         v = compute_blb_variance(preds, group_size=4)
         assert np.allclose(v, 0.0, atol=1e-10)
 
+    def test_core_formula_is_scale_invariant_in_group_size(self):
+        """
+        Regression guard for the "denominator mismatch" bug class.
+
+        With many groups (G large) the objective-Bayes cushion -> 0, so
+        compute_blb_variance must recover the TRUE between-bag variance
+        regardless of trees-per-bag L (i.e. regardless of total B = G*L).
+        If the within-bag correction were divided by B instead of (L-1),
+        large-L estimates would collapse toward 0; here they must not.
+        """
+        rng = np.random.default_rng(0)
+        G, n_test = 400, 4000
+        true_between = 0.5 ** 2  # bag-level deviation std = 0.5
+
+        def gen(L):
+            bag_dev = rng.normal(0, 0.5, size=(G, 1, n_test))
+            tree_noise = rng.normal(0, 2.0, size=(G, L, n_test))  # large within-bag noise
+            return (bag_dev + tree_noise).reshape(G * L, n_test)
+
+        means = {L: compute_blb_variance(gen(L), L).mean() for L in (2, 4, 50)}
+        for L, m in means.items():
+            assert abs(m - true_between) < 0.06, (
+                f"L={L}: V_BLB={m:.4f} far from true {true_between:.4f} "
+                "(scale-dependent core formula => denominator bug)"
+            )
+        # B grew 25x from L=2 to L=50; estimate must stay flat (no collapse).
+        assert means[50] / means[2] > 0.6
+
     def test_matches_between_minus_within_formula(self):
         rng = np.random.default_rng(7)
         L, G, n_test = 5, 12, 4
