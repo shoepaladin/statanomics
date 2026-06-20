@@ -8,7 +8,6 @@ import os
 import numpy as np
 from scipy.stats import norm
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import KFold
 from joblib import Parallel, delayed
 
 from .tree_numba import NumbaCausalTree
@@ -344,27 +343,45 @@ class NumbaCausalForest:
 
     def _estimate_nuisance(self, X, Y, W):
         """
-        Cross-fitted nuisance estimation.
+        Orthogonalization nuisances Y.hat = E[Y|X], W.hat = E[W|X], computed
+        exactly as R grf's causal_forest does: out-of-bag predictions from a
+        regression forest.
 
-        FIX: shuffles data before folding (was order-dependent),
-             uses n_folds KFold (was always 2-fold with no shuffle).
+        grf grows ``max(50, num.trees / 4)`` trees per nuisance forest and
+        takes OOB predictions (each obs predicted only by trees that did not
+        include it).  We mirror that with a bagged RandomForestRegressor and
+        its ``oob_prediction_``.  This is lower-variance than the previous
+        k-fold cross-fit (which trained a separate model per held-out fold)
+        and is what makes grf's CI calibration robust at small n.
+
+        ``n_folds`` is retained only as a deprecated no-op fallback for any obs
+        that happens to have no OOB trees (impossible in practice at >=50
+        trees, but handled defensively).
         """
-        n = len(X)
-        Y_hat = np.zeros(n)
-        W_hat = np.zeros(n)
+        n_nuisance_trees = max(50, self.n_trees // 4)
+        rf_params = {
+            'n_estimators': n_nuisance_trees,
+            # grf regression_forest defaults: deep honest trees, min.node.size=5.
+            'min_samples_leaf': 5,
+            'max_features': max(1, math.ceil(self.n_features_in_ / 3)),
+            'bootstrap': True,
+            'oob_score': True,
+            'n_jobs': -1,
+            'random_state': int(self._rng.integers(0, 2**31)),
+        }
+        rf_Y = RandomForestRegressor(**rf_params).fit(X, Y)
+        rf_W = RandomForestRegressor(**rf_params).fit(X, W)
+        Y_hat = rf_Y.oob_prediction_
+        W_hat = rf_W.oob_prediction_
 
-        kf = KFold(n_splits=self.n_folds, shuffle=True,
-                   random_state=int(self._rng.integers(0, 2**31)))
-        rf_params = {'n_estimators': 100, 'max_depth': 10, 'n_jobs': -1,
-                     'random_state': 0}
-
-        for train_idx, val_idx in kf.split(X):
-            rf_Y = RandomForestRegressor(**rf_params)
-            rf_W = RandomForestRegressor(**rf_params)
-            rf_Y.fit(X[train_idx], Y[train_idx])
-            rf_W.fit(X[train_idx], W[train_idx])
-            Y_hat[val_idx] = rf_Y.predict(X[val_idx])
-            W_hat[val_idx] = rf_W.predict(X[val_idx])
+        # Defensive: any obs in every bootstrap has no OOB estimate (NaN).
+        # Fall back to the in-bag prediction for just those points.
+        bad_Y = ~np.isfinite(Y_hat)
+        bad_W = ~np.isfinite(W_hat)
+        if bad_Y.any():
+            Y_hat[bad_Y] = rf_Y.predict(X[bad_Y])
+        if bad_W.any():
+            W_hat[bad_W] = rf_W.predict(X[bad_W])
 
         return Y_hat, W_hat
 

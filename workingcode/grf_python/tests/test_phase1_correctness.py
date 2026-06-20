@@ -109,51 +109,38 @@ class TestMtry:
 
 class TestNuisanceCrossFitting:
 
-    def test_shuffled_folds_are_not_order_dependent(self):
+    def test_oob_nuisance_is_order_independent(self):
         """
-        Create sorted data (Y correlated with row order) and verify that
-        shuffled cross-fitting gives lower nuisance MSE than unshuffled 2-fold.
+        grf computes Y.hat/W.hat as out-of-bag regression-forest predictions,
+        which (unlike positional k-fold) do not depend on row order.
 
-        The old code did  idx1 = np.arange(n_half) which puts all
-        low-Y rows in one fold when data is sorted, giving badly biased
-        estimates on the other fold.
+        Build data where Y is correlated with row order, then fit the forest on
+        the sorted data and on a random permutation of it.  The orthogonalized
+        residuals (and hence the variance estimates) must be equivalent up to
+        the permutation — the failure mode of the old unshuffled 2-fold split.
         """
         rng = np.random.default_rng(42)
         n = 400
-        # Sorted X so that first half is systematically different
-        X = np.sort(rng.standard_normal((n, 2)), axis=0)
+        X = np.sort(rng.standard_normal((n, 2)), axis=0)  # sorted => order-correlated
         W = rng.binomial(1, 0.5, n).astype(float)
         Y = X[:, 0] * 2.0 + W * X[:, 0] + rng.standard_normal(n) * 0.2
 
-        # Fixed 2-fold without shuffle (old behaviour — simulate manually)
-        from sklearn.ensemble import RandomForestRegressor
-        n_half = n // 2
-        rf1 = RandomForestRegressor(n_estimators=50, random_state=0)
-        rf1.fit(X[:n_half], Y[:n_half])
-        Y_hat_bad = np.zeros(n)
-        Y_hat_bad[n_half:] = rf1.predict(X[n_half:])
-        rf2 = RandomForestRegressor(n_estimators=50, random_state=0)
-        rf2.fit(X[n_half:], Y[n_half:])
-        Y_hat_bad[:n_half] = rf2.predict(X[:n_half])
-        mse_bad = np.mean((Y_hat_bad - Y) ** 2)
+        f_sorted = NumbaCausalForest(n_trees=40, max_depth=4, min_leaf_size=5,
+                                     verbose=0, random_state=0).fit(X, Y, W)
+        # OOB residuals should be ~mean-zero even on order-correlated data
+        assert abs(np.mean(f_sorted.Y_resid)) < 0.2
+        # and should explain most of Y's variance (low residual MSE)
+        assert np.mean(f_sorted.Y_resid ** 2) < 0.5 * np.var(Y)
 
-        # New shuffled 5-fold (new behaviour)
-        from sklearn.model_selection import KFold
-        kf = KFold(n_splits=5, shuffle=True, random_state=0)
-        Y_hat_good = np.zeros(n)
-        for tr, val in kf.split(X):
-            rf = RandomForestRegressor(n_estimators=50, random_state=0)
-            rf.fit(X[tr], Y[tr])
-            Y_hat_good[val] = rf.predict(X[val])
-        mse_good = np.mean((Y_hat_good - Y) ** 2)
+        perm = rng.permutation(n)
+        f_perm = NumbaCausalForest(n_trees=40, max_depth=4, min_leaf_size=5,
+                                   verbose=0, random_state=0).fit(X[perm], Y[perm], W[perm])
+        # Residual quality is invariant to ordering (no positional folding).
+        assert np.isclose(np.mean(f_sorted.Y_resid ** 2),
+                          np.mean(f_perm.Y_resid ** 2), rtol=0.25)
 
-        assert mse_good < mse_bad, (
-            f"Shuffled 5-fold MSE {mse_good:.4f} should be < "
-            f"unshuffled 2-fold MSE {mse_bad:.4f}"
-        )
-
-    def test_n_folds_parameter_respected(self, small_data):
-        """Forest should expose n_folds and use it."""
+    def test_n_folds_parameter_accepted(self, small_data):
+        """`n_folds` is retained for backward compat; fit must still succeed."""
         X, Y, W, _ = small_data
         for k in (2, 5):
             f = NumbaCausalForest(n_trees=3, n_folds=k, max_depth=3,
