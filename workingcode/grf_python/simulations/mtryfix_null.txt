@@ -1,0 +1,3 @@
+High-rep confirmation (grf-faithful config), reps=150
+Calibrated if 95% CI brackets 0.05.
+n=  400 B=  200 reps=150 | FPR=0.056  95%CI=[0.036,0.076]  SE/MC=1.163  [OK ]

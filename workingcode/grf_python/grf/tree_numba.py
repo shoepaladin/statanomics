@@ -63,10 +63,12 @@ class NumbaCausalTree:
         self._rng = rng if rng is not None else np.random.default_rng()
 
         n_features = X.shape[1]
-        # R grf default is ceil(p/3), which outperforms ceil(sqrt(p)) for
-        # causal forests — sqrt(p) over-restricts when p is moderate.
+        # R grf default: mtry = min(ceil(sqrt(p) + 20), p).  For small/moderate
+        # p this is ALL features; the previous ceil(p/3) under-sampled features
+        # badly (e.g. 2 of 5), starving splits of the relevant covariate and
+        # producing heavily attenuated CATEs (slope ~0.6 vs grf's ~0.76).
         self._mtry = (self.mtry if self.mtry is not None
-                      else max(1, math.ceil(n_features / 3)))
+                      else min(n_features, math.ceil(math.sqrt(n_features) + 20)))
 
         # Adaptive quantile grid: denser grids help when the split sample is
         # large, but thin out past ~1 obs/bin (which adds noise, not signal).

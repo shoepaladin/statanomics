@@ -226,10 +226,11 @@ class TestAutoNJobs:
     def test_auto_selects_sequential_for_tiny_data(self):
         """
         Small n, small p, few trees → auto should stay sequential.
-        n=500, p=5, n_trees=100: n_sub=250, mtry=2, q=12 → 600k < 1_000_000
+        n=500, p=5, n_trees=20: n_sub=250, mtry=5 (grf default), q=12
+        → 20*250*5*12 = 300k < 1_000_000
         """
         forest = NumbaCausalForest(
-            n_trees=100, subsample_ratio=0.5, min_leaf_size=5,
+            n_trees=20, subsample_ratio=0.5, min_leaf_size=5,
             honesty_fraction=0.5, n_quantiles=20,
             n_jobs='auto', random_state=0
         )
@@ -237,7 +238,7 @@ class TestAutoNJobs:
         forest.n_features_in_ = 5
         result = forest._effective_n_jobs()
         assert result == 1, (
-            f"Expected sequential for 600k work units, got n_jobs={result}"
+            f"Expected sequential for 300k work units, got n_jobs={result}"
         )
 
     def test_auto_selects_parallel_for_large_data(self):
@@ -262,13 +263,13 @@ class TestAutoNJobs:
 
     def test_auto_boundary_n_trees(self):
         """
-        n=1000, p=10: crosses the 1M threshold around n_trees=30.
-        units = n_trees × 500 × 4 × 20 = n_trees × 40_000
-        → n_trees=20 → 800k < 1M  (sequential)
-        → n_trees=50 → 2M > 1M    (parallel)
+        n=1000, p=10 (mtry=10, the grf default): crosses 1M near n_trees=10.
+        units = n_trees × 500 × 10 × 20 = n_trees × 100_000
+        → n_trees=5  → 500k < 1M  (sequential)
+        → n_trees=20 → 2M  > 1M   (parallel)
         """
         forest_lo = NumbaCausalForest(
-            n_trees=20, subsample_ratio=0.5, min_leaf_size=5,
+            n_trees=5, subsample_ratio=0.5, min_leaf_size=5,
             honesty_fraction=0.5, n_quantiles=20,
             n_jobs='auto', random_state=0
         )
@@ -276,7 +277,7 @@ class TestAutoNJobs:
         forest_lo.n_features_in_ = 10
 
         forest_hi = NumbaCausalForest(
-            n_trees=50, subsample_ratio=0.5, min_leaf_size=5,
+            n_trees=20, subsample_ratio=0.5, min_leaf_size=5,
             honesty_fraction=0.5, n_quantiles=20,
             n_jobs='auto', random_state=0
         )
@@ -287,7 +288,7 @@ class TestAutoNJobs:
         jobs_hi = forest_hi._effective_n_jobs()
 
         assert jobs_lo == 1, (
-            f"800k work units should be sequential, got {jobs_lo}"
+            f"500k work units should be sequential, got {jobs_lo}"
         )
         import os
         if (os.cpu_count() or 1) >= 2:

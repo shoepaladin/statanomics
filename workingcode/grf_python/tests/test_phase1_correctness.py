@@ -14,14 +14,47 @@ from grf.numba_core import find_best_split_numba, find_best_split_parallel
 from tests.conftest import make_data
 
 
+class TestNonNullCalibration:
+    """
+    Guards the failure mode null-only simulations cannot see: under a real
+    heterogeneous effect, too-small mtry starves splits of the relevant
+    covariate and the CATEs collapse toward 0 (heavy attenuation), wrecking
+    coverage.  With grf's mtry default the predictions track the true effect.
+    """
+
+    def test_predictions_not_attenuated_and_cover(self):
+        X, Y, W, tau_true = make_data(n=800, p=6, noise=0.5, seed=3)
+        f = NumbaCausalForest(n_trees=500, min_leaf_size=10, max_depth=8,
+                              n_jobs=-1, random_state=1).fit(X, Y, W)
+        Xt, _, _, tt = make_data(n=400, p=6, noise=0.5, seed=99)
+        pred, lo, hi = f.predict_interval(Xt)
+
+        # rank-tracking is easy; the bug is in the *scale* (slope ~0.6 when
+        # under-split).  grf-default mtry restores slope toward 1.
+        slope = np.polyfit(tt, pred, 1)[0]
+        assert slope > 0.7, f"CATE attenuated (slope={slope:.2f}); mtry too small?"
+        # Held-out 95% CI coverage of the TRUE effect.  GRF inherently
+        # under-covers when finite-sample bias is non-negligible (R grf ~0.76
+        # on this DGP), and single-forest coverage is noisy, so the bar is set
+        # well below nominal — but far above the ~0.57 the old mtry produced.
+        coverage = np.mean((tt >= lo) & (tt <= hi))
+        assert coverage > 0.65, f"non-null coverage only {coverage:.1%}"
+
+    def test_default_mtry_uses_most_features_for_small_p(self):
+        X, Y, W, _ = make_data(n=300, p=6, seed=0)
+        f = NumbaCausalForest(n_trees=10, random_state=0).fit(X, Y, W)
+        # grf default for p=6 is min(6, ceil(sqrt(6)+20)) = 6 (all features)
+        assert f.trees[0]._mtry == 6
+
+
 # ---------------------------------------------------------------------------
 # P1.1  mtry — feature subsampling
 # ---------------------------------------------------------------------------
 
 class TestMtry:
 
-    def test_mtry_default_is_p_over_3(self, small_data):
-        """Default mtry should be ceil(p/3), matching R grf default."""
+    def test_mtry_default_matches_grf(self, small_data):
+        """Default mtry should be min(p, ceil(sqrt(p)+20)), the R grf default."""
         X, Y, W, _ = small_data
         p = X.shape[1]
         forest = NumbaCausalForest(
@@ -29,7 +62,7 @@ class TestMtry:
             verbose=0, random_state=0
         )
         forest.fit(X, Y, W)
-        expected = max(1, math.ceil(p / 3))
+        expected = min(p, math.ceil(math.sqrt(p) + 20))
         assert forest.trees[0]._mtry == expected
 
     def test_mtry_1_limits_features_per_split(self, small_data):

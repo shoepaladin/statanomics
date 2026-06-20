@@ -58,8 +58,8 @@ class NumbaCausalForest:
     min_leaf_size : int
     max_depth : int
     mtry : int or None
-        Features considered per split.  None → ceil(p/3), matching R grf
-        default (outperforms ceil(sqrt(p)) for causal forests).
+        Features considered per split.  None → min(p, ceil(sqrt(p) + 20)),
+        the R grf default (= all features for small/moderate p).
     n_quantiles : int
         Maximum candidate split thresholds per feature (default 20).
         Actual count is capped at min(n_quantiles, split_sample // 10)
@@ -182,7 +182,9 @@ class NumbaCausalForest:
 
         n_sub = max(2 * self.min_leaf_size * 2,
                     int(self.subsample_ratio * self.n))
-        mtry_est = max(1, math.ceil(self.n_features_in_ / 3))
+        mtry_est = (self.mtry if self.mtry is not None
+                    else min(self.n_features_in_,
+                             math.ceil(math.sqrt(self.n_features_in_) + 20)))
         split_n = max(1, int(self.honesty_fraction * n_sub))
         q_est = max(3, min(self.n_quantiles, split_n // 10))
 
