@@ -234,13 +234,43 @@ the most plausible remaining cause is the finite-n GRF studentized statistic
 having heavier-than-normal tails at mid n (an inherent property R grf shares),
 compounded by Monte-Carlo noise at 30 reps.
 
+## Addendum 3 — high-rep confirmation (250 reps, clustered 95% CI)
+
+`simulations/highrep_confirm.py`, current grf-faithful config; FPR with a
+clustered 95% CI (per-rep rejection rate, CI across reps).  Calibrated iff the
+CI brackets 0.05:
+
+```
+ n=400 B=200   FPR=0.054  CI[0.040, 0.069]  SE/MC=1.16   OK   (calibrated)
+ n=400 B=1000  FPR=0.088  CI[0.069, 0.107]  SE/MC=1.02   HIGH (real)
+ n=800 B=200   FPR=0.034  CI[0.024, 0.045]  SE/MC=1.33   LOW  (conservative)
+ n=800 B=1000  FPR=0.050  CI[0.037, 0.063]  SE/MC=1.11   OK   (calibrated)
+```
+
+So the answer to "is the drift just simulation noise?" is **mostly yes**: three
+of four cells are calibrated or conservative once powered properly (the 30-rep
+n=800/B=1000 = 7.3% was noise; at 250 reps it is exactly 0.050).  The **one
+genuine exception is small n with many trees** — n=400/B=1000 sits at 8.8%
+(CI excludes 0.05).
+
+Crucially its `SE/MC = 1.02`: the *mean* SE is correct, so this is **not** a
+variance-magnitude error.  It is heavier-than-normal tails in the studentized
+statistic `tau_hat / SE` at small n — the normal-approximation CI
+(`+/- 1.96*SE`) is slightly too thin in the tails.  This is an inherent
+finite-sample property of GRF that R `grf` shares (grf also forms normal CIs);
+it shows up only once the ObjectiveBayes cushion has decayed (large B) and the
+sample is small.  At the practical operating point (B <= 200) the cushion keeps
+coverage calibrated-to-conservative.
+
 ## Recommendation
 
 * **Default to BLB** (`variance='blb'`) with grf defaults (`subforest_size=2`,
   `subsample_ratio=0.5`) and grf's OOB regression-forest nuisance — a faithful
-  R `grf` replication, calibrated at moderate B.
+  R `grf` replication.  Calibrated at B<=200 across n; calibrated at large B
+  for n>=800.
 * Keep `delta` and `ij` available for comparison.
-* The residual mid-n large-B drift is not a variance-scaling, cushion, or
-  nuisance-method bug (all ruled out above).  A `>=200`-rep confirmation at the
-  worst cells (n=400, large B) would settle whether any real miscalibration
-  beyond ~5-7% remains; absent that, calibration is grf-consistent.
+* The only residual miscalibration (small n, very large B: ~9% at n=400/B=1000)
+  is a finite-n heavy-tail effect with correct mean SE, inherent to GRF normal
+  CIs and shared by R `grf` — not a variance-estimator, cushion, or nuisance
+  bug (all ruled out).  If tighter small-n coverage is ever needed, the lever
+  is the CI *quantile* (e.g. a t-style / fatter quantile), not the variance.
