@@ -281,9 +281,11 @@ class NumbaCausalForest:
         half = self.n // 2
         L = max(2, int(self.subforest_size))
         n_groups = max(1, self.n_trees // L)
-        # Keep groups balanced; this is the actual number of trees grown.
-        self.n_trees = n_groups * L
+        # Keep groups balanced.  We do NOT mutate the public ``n_trees`` param
+        # (sklearn get_params must echo the constructor value); the effective
+        # count is ``len(self.trees)`` after fitting.
         self._subforest_size = L
+        self._n_trees_eff = n_groups * L
 
         # Subsample size: at most the half-sample (required so bag-mates can
         # differ), at least enough for an honest split with valid leaves.
@@ -381,7 +383,8 @@ class NumbaCausalForest:
 
         # Collect per-tree predictions.  For the delta method we also
         # accumulate the forest OLS weight matrix Omega during the same loop.
-        tree_preds = np.zeros((self.n_trees, n_test))
+        n_trees_eff = len(self.trees)
+        tree_preds = np.zeros((n_trees_eff, n_test))
         need_omega = return_std and self.variance == 'delta'
         if need_omega:
             Omega = np.zeros((self.n, n_test), dtype=np.float64)
@@ -403,7 +406,7 @@ class NumbaCausalForest:
 
             if need_omega:
                 accumulate_omega_tree(
-                    Omega, leaf_indices, leaf_sizes, self.W_resid, self.n_trees
+                    Omega, leaf_indices, leaf_sizes, self.W_resid, n_trees_eff
                 )
 
         tau_hat = np.mean(tree_preds, axis=0)
