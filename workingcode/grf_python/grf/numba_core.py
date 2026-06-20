@@ -381,6 +381,81 @@ def compute_ij_variance(tree_preds, subsample_flags, subsample_size, n_train,
     return variances
 
 
+def compute_blb_variance(tree_preds, group_size):
+    """
+    Bootstrap-of-little-bags (BLB) variance for a subsampling forest.
+
+    This is the variance estimator actually used by the R `grf` package and
+    `econml.grf` (Athey, Tibshirani & Wager 2019, sec. 4), and the reason
+    those packages get calibrated confidence intervals with only B = 100-400
+    trees.  The raw infinitesimal jackknife needs an impractically large B
+    because every one of its n squared covariances carries O(1/B) Monte-Carlo
+    noise; BLB instead estimates the variance from the *between-group*
+    spread of bag means, whose Monte-Carlo error is governed by the number of
+    groups G = B / L rather than by n.
+
+    Pre-condition (enforced by the forest's grouped subsampling): the trees
+    are ordered so that every consecutive block of `group_size` trees forms a
+    "little bag" that shares one common half-sample of the training data.
+    Each tree subsamples from that shared half.  Consequently:
+
+      * between-bag variance of the bag means reflects the half-sample
+        (data-resampling) variability == the true sampling variance of tau(x);
+      * within-bag variance reflects only the extra Monte-Carlo noise from
+        sub-subsampling within a fixed half, which we subtract off.
+
+        bag_mean_g(x) = mean_{b in g} T_b(x)
+        V_between(x)  = mean_g (bag_mean_g(x) - T_bar(x))^2
+        V_within(x)   = mean_g mean_{b in g} (T_b(x) - bag_mean_g(x))^2
+        V_BLB(x)      = V_between(x) - V_within(x) / (L - 1)
+
+    The subtraction de-biases V_between for the within-bag Monte-Carlo term
+    (E[V_between] = V_true + V_within/(L*(L-1)) ... cancelled exactly here).
+    The naive estimate can be negative when the true variance is tiny; rather
+    than hard-clipping to 0 (which biases CIs and inflates the null FPR), we
+    apply the same objective-Bayes positive-part correction econml uses.
+
+    Parameters
+    ----------
+    tree_preds : float array (n_trees, n_test)
+        Per-tree predictions, grouped in contiguous blocks of `group_size`.
+    group_size : int
+        Number of trees per little bag (L >= 2).
+
+    Returns
+    -------
+    variances : float array (n_test,)  non-negative.
+    """
+    from scipy.special import erfc
+
+    B, n_test = tree_preds.shape
+    L = group_size
+    G = B // L
+    if G < 2 or L < 2:
+        # Fall back to the plain variance of the mean (conservative).
+        return compute_variance_from_tree_preds(np.ascontiguousarray(tree_preds))
+
+    tp = tree_preds[:G * L].reshape(G, L, n_test)
+    bag_means = tp.mean(axis=1)                 # (G, n_test)
+    overall = bag_means.mean(axis=0)            # (n_test,)
+
+    v_between = np.mean((bag_means - overall) ** 2, axis=0)            # (n_test,)
+    v_within = np.mean(np.mean((tp - bag_means[:, None, :]) ** 2,
+                               axis=1), axis=0)                        # (n_test,)
+    correction = v_within / (L - 1)
+    naive = v_between - correction
+
+    # Objective-Bayes debiasing of the positive-part (matches econml.grf):
+    # smoothly maps the (possibly negative) naive estimate to a positive value
+    # instead of truncating at 0, which keeps CI coverage calibrated.
+    se = np.maximum(v_between, correction) * np.sqrt(2.0 / G)
+    zstat = naive / np.clip(se, 1e-10, np.inf)
+    numerator = np.exp(-(zstat ** 2) / 2.0) / np.sqrt(2.0 * np.pi)
+    denominator = 0.5 * erfc(-zstat / np.sqrt(2.0))
+    variances = naive + se * numerator / np.clip(denominator, 1e-10, np.inf)
+    return np.maximum(variances, 0.0)
+
+
 @jit(nopython=True, cache=True)
 def compute_variance_from_tree_preds(tree_preds):
     """

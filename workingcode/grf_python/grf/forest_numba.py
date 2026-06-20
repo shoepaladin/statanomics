@@ -18,6 +18,8 @@ from .numba_core import (
     batch_predict_from_leaves,
     accumulate_omega_tree,
     compute_delta_variance,
+    compute_blb_variance,
+    compute_ij_variance,
     compute_variance_from_tree_preds,
 )
 
@@ -79,10 +81,11 @@ class NumbaCausalForest:
     random_state : int or None
     """
 
-    def __init__(self, n_trees=100, subsample_ratio=0.5,
+    def __init__(self, n_trees=100, subsample_ratio=0.45,
                  min_leaf_size=10, max_depth=10,
                  mtry=None, n_quantiles=20,
                  n_folds=4, honesty_fraction=0.5,
+                 subforest_size=4, variance='blb',
                  use_parallel=True, n_jobs='auto',
                  verbose=0, random_state=None):
         self.n_trees = n_trees
@@ -93,6 +96,12 @@ class NumbaCausalForest:
         self.n_quantiles = n_quantiles
         self.n_folds = n_folds
         self.honesty_fraction = honesty_fraction
+        # Bootstrap-of-little-bags grouping for variance estimation.
+        # Trees are grown in groups of `subforest_size` that share a common
+        # half-sample; the between-group variance gives calibrated CIs at
+        # moderate B (the estimator used by R grf / econml.grf).
+        self.subforest_size = subforest_size
+        self.variance = variance
         self.use_parallel = use_parallel
         self.n_jobs = n_jobs
         self.verbose = verbose
@@ -114,6 +123,8 @@ class NumbaCausalForest:
             n_quantiles=self.n_quantiles,
             n_folds=self.n_folds,
             honesty_fraction=self.honesty_fraction,
+            subforest_size=self.subforest_size,
+            variance=self.variance,
             use_parallel=self.use_parallel,
             n_jobs=self.n_jobs,
             verbose=self.verbose,
@@ -253,20 +264,53 @@ class NumbaCausalForest:
 
     def _draw_subsamples(self):
         """
-        Generate (split_idx, est_idx, seed) for each tree.
-        Uses instance RNG so global numpy state is not mutated.
+        Generate (split_idx, est_idx, seed) for each tree using the
+        bootstrap-of-little-bags structure required for BLB variance.
+
+        Trees are grown in ``n_groups = n_trees // subforest_size`` groups.
+        Each group draws ONE half-sample of size n//2; every tree in the
+        group then subsamples ``n_sub`` points from that shared half and
+        honest-splits them.  Because bag-mates share a half-sample, the
+        between-group variance of bag means estimates the true sampling
+        variance of tau(x) (Athey, Tibshirani & Wager 2019).
+
+        ``n_trees`` is rounded down to a multiple of ``subforest_size`` so the
+        groups are balanced; the effective count is stored back on the model.
+        Uses the instance RNG so global numpy state is not mutated.
         """
-        n_sub = max(2 * self.min_leaf_size * 2,
-                    int(self.subsample_ratio * self.n))
-        self._subsample_size = n_sub  # stored for IJ variance formula
+        half = self.n // 2
+        L = max(2, int(self.subforest_size))
+        n_groups = max(1, self.n_trees // L)
+        # Keep groups balanced; this is the actual number of trees grown.
+        self.n_trees = n_groups * L
+        self._subforest_size = L
+
+        # Subsample size: at most the half-sample (required so bag-mates can
+        # differ), at least enough for an honest split with valid leaves.
+        floor = 2 * self.min_leaf_size * 2
+        n_sub = min(half, max(floor, int(self.subsample_ratio * self.n)))
+        if n_sub > half:
+            n_sub = half
+        self._subsample_size = n_sub
+
         subsamples = []
-        for _ in range(self.n_trees):
-            idx = self._rng.choice(self.n, n_sub, replace=False)
-            mid = max(1, int(self.honesty_fraction * len(idx)))
-            split_idx = idx[:mid]
-            est_idx = idx[mid:]
-            seed = int(self._rng.integers(0, 2**31))
-            subsamples.append((split_idx, est_idx, seed))
+        slices = []
+        tree_id = 0
+        for _ in range(n_groups):
+            half_idx = self._rng.choice(self.n, half, replace=False)
+            group_ids = []
+            for _ in range(L):
+                sub = half_idx[self._rng.choice(half, n_sub, replace=False)]
+                mid = max(1, int(self.honesty_fraction * len(sub)))
+                split_idx = sub[:mid]
+                est_idx = sub[mid:]
+                seed = int(self._rng.integers(0, 2**31))
+                subsamples.append((split_idx, est_idx, seed))
+                group_ids.append(tree_id)
+                tree_id += 1
+            slices.append(np.array(group_ids, dtype=np.int64))
+        # Contiguous blocks of L trees form each bag (see compute_blb_variance).
+        self.slices_ = slices
         return subsamples
 
     def _build_single_tree(self, split_idx, est_idx, seed):
@@ -335,10 +379,11 @@ class NumbaCausalForest:
         X = np.ascontiguousarray(X, dtype=np.float64)
         n_test = len(X)
 
-        # Collect per-tree predictions; also accumulate delta-method weights
+        # Collect per-tree predictions.  For the delta method we also
+        # accumulate the forest OLS weight matrix Omega during the same loop.
         tree_preds = np.zeros((self.n_trees, n_test))
-
-        if return_std:
+        need_omega = return_std and self.variance == 'delta'
+        if need_omega:
             Omega = np.zeros((self.n, n_test), dtype=np.float64)
 
         for b, tree in enumerate(self.trees):
@@ -356,7 +401,7 @@ class NumbaCausalForest:
                 self.Y_resid, self.W_resid, leaf_indices, leaf_sizes
             )
 
-            if return_std:
+            if need_omega:
                 accumulate_omega_tree(
                     Omega, leaf_indices, leaf_sizes, self.W_resid, self.n_trees
                 )
@@ -366,9 +411,34 @@ class NumbaCausalForest:
         if not return_std:
             return tau_hat
 
-        variances = compute_delta_variance(Omega, self.Y_resid)
+        variances = self._compute_variance(tree_preds,
+                                           Omega if need_omega else None)
         std = np.sqrt(np.maximum(variances, 0.0))
         return tau_hat, std
+
+    def _compute_variance(self, tree_preds, Omega):
+        """
+        Dispatch to the configured variance estimator.
+
+        'blb'   : bootstrap-of-little-bags (default) — calibrated at moderate B.
+        'delta' : delta-method OLS-weight variance.
+        'ij'    : bias-corrected infinitesimal jackknife (needs large B).
+        """
+        method = self.variance
+        if method == 'blb':
+            return compute_blb_variance(tree_preds, self._subforest_size)
+        if method == 'delta':
+            return compute_delta_variance(Omega, self.Y_resid)
+        if method == 'ij':
+            flags = np.array([t.in_subsample_ for t in self.trees], dtype=bool)
+            return compute_ij_variance(
+                tree_preds, flags, self._subsample_size, self.n,
+                bias_correction=True,
+            )
+        raise ValueError(
+            f"Unknown variance method {method!r}; "
+            "expected 'blb', 'delta', or 'ij'."
+        )
 
     def predict_interval(self, X, alpha=0.05):
         tau, std = self.predict(X, return_std=True)
