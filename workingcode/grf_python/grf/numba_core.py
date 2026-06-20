@@ -294,19 +294,42 @@ def compute_delta_variance(Omega, Y_resid):
     return sigma2 * np.sum(Omega ** 2, axis=0)
 
 
-def compute_ij_variance(tree_preds, subsample_flags, subsample_size, n_train):
+def compute_ij_variance(tree_preds, subsample_flags, subsample_size, n_train,
+                        bias_correction=True):
     """
-    Proper Infinitesimal Jackknife variance for a subsampling forest.
+    Infinitesimal Jackknife variance for a subsampling forest, with the
+    finite-B Monte-Carlo bias correction (IJ-U).
 
-    The previous implementation summed deviations from their own mean
-    (algebraically zero), giving V=0 always.  This replaces it with the
-    correct formula from Wager, Hastie & Efron (2014) / Athey & Wager (2019):
+    Raw IJ covariance (Wager, Hastie & Efron 2014; Athey & Wager 2019):
 
-        cov_bj(x) = (1/B) * sum_b [ T_b(x) * I_bj ] - T_bar(x) * p_j
-        V_IJ(x)   = (n / s) * sum_j  cov_bj(x)^2
+        cov_j(x) = (1/B) * sum_b [ T_b(x) * I_bj ] - T_bar(x) * p_j
+                 = (1/B) * sum_b (I_bj - p_j)(T_b(x) - T_bar(x))
+        V_raw(x) = (n / s) * sum_j cov_j(x)^2
 
-    where I_bj = 1 if training obs j was in subsample b, p_j = empirical
-    inclusion rate, n = total training size, s = subsample size.
+    With a *finite* number of trees B, V_raw is the sum of n squared sample
+    covariances, each estimated from only B trees.  Each cov_j carries
+    Monte-Carlo sampling noise of order 1/B, so E[cov_j^2] = Cov_true^2 +
+    Var(cov_j), and summing n of these inflates the variance estimate by a
+    positive O(n/B) bias.  This is exactly why the *uncorrected* estimator
+    needed an impractically huge B to calibrate (the "0% FPR / B>>9000"
+    symptom): it was not a theoretical limitation of IJ, just a missing
+    correction term.
+
+    The Wager-Hastie-Efron bias correction subtracts an estimate of that
+    Monte-Carlo noise.  Under independence of inclusion and prediction
+    (the relevant regime under the null),
+
+        Var(cov_j) ~= (1/B) * p_j (1 - p_j) * sigma_T^2(x),
+
+    where sigma_T^2(x) = (1/B) sum_b (T_b(x) - T_bar(x))^2 is the empirical
+    variance of the tree predictions at x.  Hence
+
+        V_IJ-U(x) = (n/s) * [ sum_j cov_j(x)^2
+                              - (sigma_T^2(x) / B) * sum_j p_j (1 - p_j) ].
+
+    Sanity check vs. the WHE bootstrap form: with sampling-with-replacement
+    (scale n/s -> 1, Var(N_j) -> 1) this reduces to V_raw - (n/B) sigma_T^2,
+    i.e. their (n / B^2) sum_b (T_b - T_bar)^2 correction.
 
     Parameters
     ----------
@@ -315,12 +338,17 @@ def compute_ij_variance(tree_preds, subsample_flags, subsample_size, n_train):
     subsample_flags : bool array (n_trees, n_train)
         Whether each training obs was in each tree's subsample.
     subsample_size : int
-        Number of training obs per subsample.
+        Number of training obs per subsample (s).
     n_train : int
+        Total training size (n).
+    bias_correction : bool
+        If True (default) return the bias-corrected IJ-U estimate; if False
+        return the raw (uncorrected, positively biased) IJ estimate.
 
     Returns
     -------
     variances : float array (n_test,)
+        Non-negative; the correction is floored at 0 per test point.
     """
     n_trees, n_test = tree_preds.shape
     if n_trees < 2:
@@ -335,12 +363,21 @@ def compute_ij_variance(tree_preds, subsample_flags, subsample_size, n_train):
     T_bar = tree_preds.mean(axis=0)        # (n_test,)
     p_j = flags.mean(axis=0)              # (n_train,) empirical inclusion rate
 
-    # cov_bj: (n_test, n_train)
-    cov_bj = T_mean_ij - T_bar[:, np.newaxis] * p_j[np.newaxis, :]
+    # cov_j: (n_test, n_train)
+    cov_j = T_mean_ij - T_bar[:, np.newaxis] * p_j[np.newaxis, :]
 
-    # V_IJ(x) = (n / s) * sum_j cov_bj(x)^2
     scale = n_train / subsample_size
-    variances = scale * np.sum(cov_bj ** 2, axis=1)
+    raw = np.sum(cov_j ** 2, axis=1)        # (n_test,)
+
+    if not bias_correction:
+        return scale * raw
+
+    # Monte-Carlo bias term per test point.
+    sigma_T2 = tree_preds.var(axis=0)       # (n_test,)  population var over trees
+    sum_pq = np.sum(p_j * (1.0 - p_j))      # scalar; ~ s(n-s)/n for p_j ~ s/n
+    bias = (sigma_T2 / n_trees) * sum_pq    # (n_test,)
+
+    variances = scale * np.maximum(raw - bias, 0.0)
     return variances
 
 
