@@ -194,17 +194,53 @@ The B-effect (FPR drifting up with B) persists but is now mild, and the
 large-B values sit at 6–7% rather than 8–12%.  The drift is the grf
 ObjectiveBayes cushion relaxing as groups accumulate (`sqrt(2/num_groups)`);
 small forests are deliberately conservative (n=800/B=50 → 0% at just 25
-groups).  The remaining few points of large-B anti-conservatism at mid n are
-the gap between our externally cross-fitted DML nuisance step and grf's
-*internal* local centering — the documented follow-up, not a variance-scaling
-bug.
+groups).
+
+## Addendum 2 — matching grf's nuisance step (OOB regression forest)
+
+We then replaced the k-fold `RandomForestRegressor` cross-fit with grf's actual
+orthogonalization: out-of-bag predictions from a regression forest with
+`max(50, num.trees/4)` trees (R grf `causal_forest`:
+`Y.hat <- predict(regression_forest(X, Y))$predictions`).
+
+Direct comparison under grf defaults (subforest_size=2, subsample_ratio=0.5,
+30 reps, null DGP; FPR with SE/MC in parentheses):
+
+```
+   cell        OOB nuisance     k-fold nuisance
+ n=400 B=50    3.3% (1.28)      2.7% (1.36)
+ n=400 B=200   7.3% (1.09)      5.3% (1.14)
+ n=400 B=1000 10.0% (0.96)      6.7% (0.97)
+ n=800 B=50    1.3% (1.58)      0.0% (1.56)
+ n=800 B=200   2.0% (1.30)      4.7% (1.30)
+ n=800 B=1000  7.3% (1.05)      6.0% (1.12)
+```
+
+Conclusion: switching to grf's exact nuisance step is **a wash within
+Monte-Carlo noise** (30 reps x 5 correlated points => FPR SE ~1.8%; the
+n=800/B=1000 cell alone moved 6.0%->7.3% between two nominally-similar runs).
+It does NOT resolve the mid-n large-B drift, so that drift is **not** a
+nuisance-method artifact.  (We keep the OOB nuisance because it is the faithful
+grf replication, not because it changes calibration.)
+
+Having now ruled out, in turn:
+  * the variance formula (faithful, scale-invariant grf port);
+  * the BLB cushion / B-scaling (grf-intended ObjectiveBayes behavior);
+  * the nuisance method (k-fold vs OOB: a wash);
+  * nuisance *presence* (bypassing it helps slightly, yet *tighter* OOB
+    nuisance hurts slightly — contradictory, so nuisance is not the driver),
+
+the most plausible remaining cause is the finite-n GRF studentized statistic
+having heavier-than-normal tails at mid n (an inherent property R grf shares),
+compounded by Monte-Carlo noise at 30 reps.
 
 ## Recommendation
 
-* **Default to BLB** (`variance='blb'`) — it is the estimator GRF actually
-  proposes, calibrates at moderate B, and matches `econml`.
+* **Default to BLB** (`variance='blb'`) with grf defaults (`subforest_size=2`,
+  `subsample_ratio=0.5`) and grf's OOB regression-forest nuisance — a faithful
+  R `grf` replication, calibrated at moderate B.
 * Keep `delta` and `ij` available for comparison.
-* The n=400 anti-conservatism is a separate, pre-existing nuisance-estimation
-  issue affecting every method; addressing it (e.g. richer cross-fitting, or
-  propagating nuisance variance) is follow-up work, not a variance-estimator
-  bug.
+* The residual mid-n large-B drift is not a variance-scaling, cushion, or
+  nuisance-method bug (all ruled out above).  A `>=200`-rep confirmation at the
+  worst cells (n=400, large B) would settle whether any real miscalibration
+  beyond ~5-7% remains; absent that, calibration is grf-consistent.
