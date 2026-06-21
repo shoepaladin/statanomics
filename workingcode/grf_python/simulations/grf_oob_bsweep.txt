@@ -1,0 +1,8 @@
+grf-faithful defaults + OOB regression-forest nuisance (max(50,B/4) trees)
+n=  400 B=   50 | FPR=0.033  SE/MC=1.280  groups=B/2=25
+n=  400 B=  200 | FPR=0.073  SE/MC=1.085  groups=B/2=100
+n=  400 B= 1000 | FPR=0.100  SE/MC=0.956  groups=B/2=500
+n=  800 B=   50 | FPR=0.013  SE/MC=1.575  groups=B/2=25
+n=  800 B=  200 | FPR=0.020  SE/MC=1.297  groups=B/2=100
+n=  800 B= 1000 | FPR=0.073  SE/MC=1.054  groups=B/2=500
+Done.

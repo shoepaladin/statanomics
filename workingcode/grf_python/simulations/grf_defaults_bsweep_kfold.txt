@@ -1,0 +1,8 @@
+grf-faithful defaults: subforest_size=2, subsample_ratio=0.5
+n=  400 B=   50 | FPR=0.027  SE/MC=1.356  groups=B/2=25
+n=  400 B=  200 | FPR=0.053  SE/MC=1.140  groups=B/2=100
+n=  400 B= 1000 | FPR=0.067  SE/MC=0.969  groups=B/2=500
+n=  800 B=   50 | FPR=0.000  SE/MC=1.562  groups=B/2=25
+n=  800 B=  200 | FPR=0.047  SE/MC=1.304  groups=B/2=100
+n=  800 B= 1000 | FPR=0.060  SE/MC=1.115  groups=B/2=500
+Done.
