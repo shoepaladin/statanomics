@@ -9,3 +9,20 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 workingcode/panelmodels/__pycache__/
+# Python artifacts
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+
+# Jupyter checkpoints
+**/.ipynb_checkpoints/
+
+# GRF Python build artifacts
+workingcode/grf_python/build/
+workingcode/grf_python/grf.egg-info/
+workingcode/grf_python/grf/*.c
+workingcode/grf_python/grf/*.pyd
+
+# Claude AI context files
+workingcode/panelmodels/.claude/
+workingcode/panelmodels/CLAUDE.md
