@@ -36,7 +36,7 @@ class TestFeatureImportances:
         X, Y, W, _ = make_data(n=600, p=5, noise=0.2, seed=0)
         forest = NumbaCausalForest(
             n_trees=60, max_depth=6, min_leaf_size=5,
-            n_folds=5, n_quantiles=15, mtry=None,
+            n_quantiles=15, mtry=None,
             verbose=0, random_state=0
         )
         forest.fit(X, Y, W)
@@ -74,7 +74,7 @@ class TestOOBPredictions:
         X, Y, W, _ = make_data(n=400, p=4, noise=0.3, seed=0)
         forest = NumbaCausalForest(
             n_trees=50, max_depth=5, min_leaf_size=5,
-            n_folds=2, n_quantiles=10,
+            n_quantiles=10,
             subsample_ratio=0.5, verbose=0, random_state=0
         )
         forest.fit(X, Y, W)
@@ -87,7 +87,7 @@ class TestOOBPredictions:
         X, Y, W, tau_true = make_data(n=500, p=4, noise=0.3, seed=0)
         forest = NumbaCausalForest(
             n_trees=60, max_depth=6, min_leaf_size=5,
-            n_folds=5, n_quantiles=15,
+            n_quantiles=15,
             subsample_ratio=0.6, verbose=0, random_state=0
         )
         forest.fit(X, Y, W)
@@ -101,7 +101,7 @@ class TestOOBPredictions:
         X, Y, W, tau_true = make_data(n=400, p=4, noise=0.2, seed=0)
         forest = NumbaCausalForest(
             n_trees=50, max_depth=5, min_leaf_size=5,
-            n_folds=2, n_quantiles=10, verbose=0, random_state=0
+            n_quantiles=10, verbose=0, random_state=0
         )
         forest.fit(X, Y, W)
         oob = forest.oob_predict()
@@ -124,7 +124,7 @@ class TestVerbose:
         X, Y, W, _ = small_data
         forest = NumbaCausalForest(
             n_trees=3, max_depth=3, min_leaf_size=10,
-            n_folds=2, n_quantiles=5, verbose=0, random_state=0
+            n_quantiles=5, verbose=0, random_state=0
         )
         forest.fit(X, Y, W)
         captured = capsys.readouterr()
@@ -142,24 +142,24 @@ class TestInputValidation:
     def test_1d_X_raises(self, small_data):
         X, Y, W, _ = small_data
         with pytest.raises(ValueError, match="2-D"):
-            NumbaCausalForest(n_trees=3, n_folds=2).fit(X[:, 0], Y, W)
+            NumbaCausalForest(n_trees=3).fit(X[:, 0], Y, W)
 
     def test_length_mismatch_Y_raises(self, small_data):
         X, Y, W, _ = small_data
         with pytest.raises(ValueError, match="Y length"):
-            NumbaCausalForest(n_trees=3, n_folds=2).fit(X, Y[:-1], W)
+            NumbaCausalForest(n_trees=3).fit(X, Y[:-1], W)
 
     def test_length_mismatch_W_raises(self, small_data):
         X, Y, W, _ = small_data
         with pytest.raises(ValueError, match="W length"):
-            NumbaCausalForest(n_trees=3, n_folds=2).fit(X, Y, W[:-1])
+            NumbaCausalForest(n_trees=3).fit(X, Y, W[:-1])
 
     def test_nan_in_X_raises(self, small_data):
         X, Y, W, _ = small_data
         X_bad = X.copy()
         X_bad[0, 0] = np.nan
         with pytest.raises(ValueError, match="NaN"):
-            NumbaCausalForest(n_trees=3, n_folds=2).fit(X_bad, Y, W)
+            NumbaCausalForest(n_trees=3).fit(X_bad, Y, W)
 
     def test_predict_before_fit_raises(self, small_data):
         X, _, _, _ = small_data
@@ -181,7 +181,7 @@ class TestHonestyFraction:
     def test_fraction_stored_correctly(self, small_data):
         X, Y, W, _ = small_data
         for hf in (0.3, 0.5, 0.7):
-            f = NumbaCausalForest(n_trees=3, n_folds=2, honesty_fraction=hf,
+            f = NumbaCausalForest(n_trees=3, honesty_fraction=hf,
                                   max_depth=3, min_leaf_size=5, verbose=0,
                                   random_state=0)
             f.fit(X, Y, W)
@@ -190,7 +190,7 @@ class TestHonestyFraction:
     def test_fraction_affects_split_estimation_ratio(self, small_data):
         """Higher honesty_fraction → larger split sample → deeper trees."""
         X, Y, W, _ = small_data
-        common = dict(n_trees=10, n_folds=2, max_depth=6, min_leaf_size=5,
+        common = dict(n_trees=10, max_depth=6, min_leaf_size=5,
                       n_quantiles=5, verbose=0, random_state=0)
 
         def avg_depth(forest):

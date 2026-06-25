@@ -10,8 +10,7 @@ def cell(n,B,reps=30):
     for r in range(reps):
         rng=np.random.default_rng(r*37+7)
         X=rng.standard_normal((n,5)); W=rng.binomial(1,.5,n).astype(float); Y=rng.standard_normal(n)
-        cf=NumbaCausalForest(n_trees=B, max_depth=8, min_leaf_size=10, n_folds=4,
-                             n_quantiles=20, n_jobs=1, random_state=r*13)  # grf defaults
+        cf=NumbaCausalForest(n_trees=B, max_depth=8, min_leaf_size=10, n_quantiles=20, n_jobs=1, random_state=r*13)  # grf defaults
         cf.fit(X,Y,W)
         tau,std=cf.predict(Xt, return_std=True)
         taus[r]=tau; ses[r]=std

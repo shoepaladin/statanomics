@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from typing import Optional
 from .numba_core import (
     estimate_tau_ols_numba,
-    find_best_split_parallel,
-    find_best_split_numba,
+    find_best_split_honest_parallel,
+    find_best_split_honest_numba,
 )
 
 
@@ -120,16 +120,20 @@ class NumbaCausalTree:
         n_features = self.X.shape[1]
         feature_indices = self._sample_features(n_features)
 
+        # Honest split search: enforce min_leaf on BOTH the splitting sample
+        # and the estimation sample, so the estimation child of an accepted
+        # split is never orphaned (issue #5, item 3b).  The score is still a
+        # function of the splitting sample only.
         if self.use_parallel and len(feature_indices) > 1:
-            feat, thresh, score = find_best_split_parallel(
+            feat, thresh, score = find_best_split_honest_parallel(
                 self.X, self.Y_resid, self.W_resid,
-                split_idx, tau_parent, self.min_leaf_size,
+                split_idx, est_idx, tau_parent, self.min_leaf_size,
                 self._percentiles, feature_indices
             )
         else:
-            feat, thresh, score = find_best_split_numba(
+            feat, thresh, score = find_best_split_honest_numba(
                 self.X, self.Y_resid, self.W_resid,
-                split_idx, tau_parent, self.min_leaf_size,
+                split_idx, est_idx, tau_parent, self.min_leaf_size,
                 self._percentiles, feature_indices
             )
 

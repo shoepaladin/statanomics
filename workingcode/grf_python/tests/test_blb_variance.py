@@ -175,8 +175,7 @@ class TestVarianceMethods:
             W = rng.binomial(1, 0.5, n).astype(float)
             Y = rng.standard_normal(n)
             f = NumbaCausalForest(n_trees=100, subforest_size=4, variance='blb',
-                                  max_depth=6, min_leaf_size=10, n_folds=4,
-                                  n_jobs=1, random_state=r * 13).fit(X, Y, W)
+                                  max_depth=6, min_leaf_size=10, n_jobs=1, random_state=r * 13).fit(X, Y, W)
             tau, std = f.predict(X_test, return_std=True)
             taus[r] = tau
             ses[r] = std

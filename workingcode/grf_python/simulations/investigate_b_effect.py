@@ -44,7 +44,7 @@ def run_cell(n, B, n_reps):
 
         cf = NumbaCausalForest(
             n_trees=B, max_depth=8, min_leaf_size=10,
-            n_folds=4, n_quantiles=20, n_jobs=1,
+            n_quantiles=20, n_jobs=1,
             random_state=rep * 13
         )
         cf.fit(X, Y, W)
