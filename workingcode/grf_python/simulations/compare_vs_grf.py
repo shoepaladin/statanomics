@@ -30,12 +30,26 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from grf.forest_numba import NumbaCausalForest
 
 
-def make_data(n, p, noise, seed):
-    """tau(x) = x0; W randomized; homoskedastic Gaussian noise (conftest DGP)."""
+def tau_fn(X, dgp):
+    """Ground-truth CATE for the chosen DGP."""
+    x0, x1, x2 = X[:, 0], X[:, 1], X[:, 2]
+    if dgp == "linear":            # original: linear, monotonic, univariate
+        return x0
+    if dgp == "sine":              # non-monotonic, univariate (one trough + one peak)
+        return np.sin(np.pi * x0)
+    if dgp == "hills":             # non-linear, non-monotonic, multivariate w/ interaction
+        # sin(pi*x0): non-monotone in x0; x1*x2: saddle (non-monotone interaction);
+        # bump in x0: a localized feature that fine leaves must resolve.
+        return np.sin(np.pi * x0) + x1 * x2 + 0.5 * np.exp(-8.0 * x0 ** 2)
+    raise ValueError(f"unknown dgp {dgp!r}")
+
+
+def make_data(n, p, noise, seed, dgp="linear"):
+    """W randomized; homoskedastic Gaussian noise; tau set by `dgp`."""
     rng = np.random.default_rng(seed)
     X = rng.uniform(-1, 1, (n, p))
     W = rng.binomial(1, 0.5, n).astype(float)
-    tau = X[:, 0]
+    tau = tau_fn(X, dgp)
     Y = tau * W + rng.normal(0, noise, n)
     return X, Y, W, tau
 
@@ -85,6 +99,9 @@ def main():
     ap.add_argument("--noise", type=float, default=0.5)
     ap.add_argument("--num-trees", type=int, default=2000)
     ap.add_argument("--min-node", type=int, default=10)
+    ap.add_argument("--dgp", choices=["linear", "sine", "hills"], default="linear",
+                    help="ground-truth CATE: linear (default), sine (non-monotone), "
+                         "hills (non-linear, non-monotone, multivariate interaction)")
     args = ap.parse_args()
 
     py = np.zeros((args.reps, 3))
@@ -92,8 +109,8 @@ def main():
 
     for rep in range(args.reps):
         seed_tr, seed_te = 100 + rep, 900 + rep
-        Xtr, Ytr, Wtr, _ = make_data(args.n, args.p, args.noise, seed_tr)
-        Xte, _, _, tau_te = make_data(args.n_test, args.p, args.noise, seed_te)
+        Xtr, Ytr, Wtr, _ = make_data(args.n, args.p, args.noise, seed_tr, args.dgp)
+        Xte, _, _, tau_te = make_data(args.n_test, args.p, args.noise, seed_te, args.dgp)
 
         # Python
         f = NumbaCausalForest(n_trees=args.num_trees, min_leaf_size=args.min_node,
@@ -111,8 +128,8 @@ def main():
               f"mae={py[rep,2]:.3f})  R(slope={r[rep,0]:.3f} cov={r[rep,1]:.3f} "
               f"mae={r[rep,2]:.3f})")
 
-    print("\n=== mean over reps (n={}, p={}, num_trees={}, min_node={}) ==="
-          .format(args.n, args.p, args.num_trees, args.min_node))
+    print("\n=== mean over reps (dgp={}, n={}, p={}, num_trees={}, min_node={}) ==="
+          .format(args.dgp, args.n, args.p, args.num_trees, args.min_node))
     hdr = f"{'estimator':<16}{'slope':>8}{'coverage':>10}{'mean|err|':>11}"
     print(hdr); print("-" * len(hdr))
     print(f"{'Python (this PR)':<16}{py[:,0].mean():>8.3f}{py[:,1].mean():>10.3f}{py[:,2].mean():>11.3f}")
