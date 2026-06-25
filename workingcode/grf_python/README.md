@@ -42,9 +42,8 @@ NumbaCausalForest(
     subsample_ratio = 0.5,    # fraction of n drawn per tree (without replacement)
     min_leaf_size   = 10,     # minimum estimation-sample observations per leaf
     max_depth       = 10,     # maximum tree depth
-    mtry            = None,   # features considered per split; None → ceil(p/3)
+    mtry            = None,   # features considered per split; None → grf default min(p, ceil(sqrt(p)+20))
     n_quantiles     = 20,     # max candidate split thresholds per feature
-    n_folds         = 4,      # cross-fitting folds for nuisance estimation
     honesty_fraction= 0.5,    # share of subsample used for structure (vs estimation)
     use_parallel    = True,   # Numba prange within a single tree's feature search
     n_jobs          = 'auto', # loky processes for tree building (see below)
@@ -152,17 +151,19 @@ loky gives each worker its own process and address space. Workers run with
 
 ## Algorithm Details
 
-### 1. Cross-fitted nuisance estimation
+### 1. Out-of-bag nuisance estimation
 
 ```
-For each fold:
-    fit E[Y|X] and E[W|X] on training fold → predict on validation fold
+fit a bagged regression forest for E[Y|X] and one for E[W|X]
+Ŷ, Ŵ = out-of-bag predictions (each obs predicted only by trees that excluded it)
 Y_resid = Y - Ŷ,   W_resid = W - Ŵ
 ```
 
-Uses `n_folds`-fold cross-fitting with shuffled KFold to avoid order-dependent
-bias. Random forests (100 estimators, depth 10) are used as flexible nuisance
-learners.
+Mirrors R `grf`'s `causal_forest`: `max(50, num.trees/4)` trees per nuisance
+forest, OOB predictions for orthogonalization. OOB prediction is order-
+independent (no positional folding) and lower-variance than k-fold cross-
+fitting at small n. (A `n_folds` parameter existed in earlier versions as a
+no-op; it has been removed — see issue #5.)
 
 ### 2. Honest tree construction
 
@@ -171,7 +172,13 @@ Each tree subsample is split `honesty_fraction` / `(1 - honesty_fraction)` into:
 - **Estimation sample**: estimates leaf treatment effects (never seen during splitting)
 
 This prevents the overconfident predictions that arise when the same data both
-chooses splits and estimates effects.
+chooses splits and estimates effects. `min_leaf_size` is enforced on **both**
+samples during the split search (grf `min.node.size` semantics): a candidate
+split is rejected unless each child holds at least `min_leaf_size` structure
+points *and* `min_leaf_size` estimation points, so honest leaves are never
+orphaned (issue #5). Any leaf that is still degenerate at prediction time
+(size < 2 or `W'W ≈ 0`) is dropped from the forest average and the variance,
+not silently treated as τ = 0.
 
 ### 3. Gradient-based splitting
 

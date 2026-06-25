@@ -58,8 +58,7 @@ class TestMtry:
         X, Y, W, _ = small_data
         p = X.shape[1]
         forest = NumbaCausalForest(
-            n_trees=5, max_depth=4, min_leaf_size=5, n_folds=2,
-            verbose=0, random_state=0
+            n_trees=5, max_depth=4, min_leaf_size=5, verbose=0, random_state=0
         )
         forest.fit(X, Y, W)
         expected = min(p, math.ceil(math.sqrt(p) + 20))
@@ -69,8 +68,7 @@ class TestMtry:
         """mtry=1 means each split can only use 1 feature."""
         X, Y, W, _ = small_data
         forest = NumbaCausalForest(
-            n_trees=5, max_depth=4, min_leaf_size=5, n_folds=2,
-            mtry=1, verbose=0, random_state=0
+            n_trees=5, max_depth=4, min_leaf_size=5, mtry=1, verbose=0, random_state=0
         )
         forest.fit(X, Y, W)
         # Collect features actually used across all splits in all trees
@@ -96,8 +94,7 @@ class TestMtry:
         X, Y, W, _ = small_data
         p = X.shape[1]
         forest = NumbaCausalForest(
-            n_trees=5, max_depth=4, min_leaf_size=5, n_folds=2,
-            mtry=p, verbose=0, random_state=0
+            n_trees=5, max_depth=4, min_leaf_size=5, mtry=p, verbose=0, random_state=0
         )
         forest.fit(X, Y, W)
         assert all(t._mtry == p for t in forest.trees)
@@ -124,7 +121,7 @@ class TestMtry:
         X, Y, W, _ = small_data
         p = X.shape[1]
         common = dict(n_trees=20, max_depth=5, min_leaf_size=5,
-                      n_folds=2, verbose=0, random_state=0)
+                      verbose=0, random_state=0)
 
         f_full = NumbaCausalForest(**common, mtry=p)
         f_sqrt = NumbaCausalForest(**common, mtry=1)
@@ -137,7 +134,7 @@ class TestMtry:
 
 
 # ---------------------------------------------------------------------------
-# P1.2  Nuisance cross-fitting: shuffle + n_folds
+# P1.2  Nuisance estimation: order-independent OOB regression forest
 # ---------------------------------------------------------------------------
 
 class TestNuisanceCrossFitting:
@@ -172,14 +169,16 @@ class TestNuisanceCrossFitting:
         assert np.isclose(np.mean(f_sorted.Y_resid ** 2),
                           np.mean(f_perm.Y_resid ** 2), rtol=0.25)
 
-    def test_n_folds_parameter_accepted(self, small_data):
-        """`n_folds` is retained for backward compat; fit must still succeed."""
-        X, Y, W, _ = small_data
-        for k in (2, 5):
-            f = NumbaCausalForest(n_trees=3, n_folds=k, max_depth=3,
-                                  min_leaf_size=5, verbose=0, random_state=0)
-            f.fit(X, Y, W)  # should not raise
-            assert f.n_folds == k
+    def test_n_folds_parameter_removed(self, small_data):
+        """
+        `n_folds` was a dead no-op (OOB nuisance ignores it) and has been
+        removed (issue #5).  Passing it must now raise TypeError rather than
+        silently accepting a value that does nothing, and it must not appear in
+        get_params().
+        """
+        with pytest.raises(TypeError):
+            NumbaCausalForest(**{'n_trees': 3, 'n_folds': 5})
+        assert 'n_folds' not in NumbaCausalForest().get_params()
 
     def test_cross_fit_residuals_have_small_mean(self, medium_data):
         """
@@ -187,7 +186,7 @@ class TestNuisanceCrossFitting:
         mean-zero (a basic sanity check that nuisance estimation is working).
         """
         X, Y, W, _ = medium_data
-        forest = NumbaCausalForest(n_trees=5, n_folds=5, max_depth=4,
+        forest = NumbaCausalForest(n_trees=5, max_depth=4,
                                    min_leaf_size=5, verbose=0, random_state=0)
         forest.fit(X, Y, W)
         assert abs(np.mean(forest.Y_resid)) < 0.5
@@ -226,8 +225,7 @@ class TestSplitThresholds:
         tau_true = np.where(X[:, 0] < 0.1, 2.0, 0.0)
         Y = tau_true * W + rng.normal(0, 0.1, n)
 
-        common = dict(n_trees=40, max_depth=4, min_leaf_size=5, n_folds=2,
-                      verbose=0, random_state=0)
+        common = dict(n_trees=40, max_depth=4, min_leaf_size=5, verbose=0, random_state=0)
         f3 = NumbaCausalForest(**common, n_quantiles=3)
         f20 = NumbaCausalForest(**common, n_quantiles=20)
         f3.fit(X, Y, W)
@@ -283,7 +281,7 @@ class TestInstanceRNG:
         pre_state = np.random.get_state()[1].copy()  # array of ints
 
         forest = NumbaCausalForest(n_trees=5, max_depth=3, min_leaf_size=5,
-                                   n_folds=2, verbose=0, random_state=42)
+                                   verbose=0, random_state=42)
         forest.fit(X, Y, W)
 
         post_state = np.random.get_state()[1].copy()
@@ -300,8 +298,7 @@ class TestInstanceRNG:
     def test_same_random_state_gives_same_predictions(self, small_data):
         """Two forests with the same random_state must produce identical output."""
         X, Y, W, _ = small_data
-        common = dict(n_trees=10, max_depth=4, min_leaf_size=5, n_folds=2,
-                      verbose=0, random_state=123)
+        common = dict(n_trees=10, max_depth=4, min_leaf_size=5, verbose=0, random_state=123)
         f1 = NumbaCausalForest(**common)
         f2 = NumbaCausalForest(**common)
         f1.fit(X, Y, W)
@@ -314,9 +311,9 @@ class TestInstanceRNG:
         """Different seeds should (very likely) differ."""
         X, Y, W, _ = small_data
         f1 = NumbaCausalForest(n_trees=10, max_depth=4, min_leaf_size=5,
-                               n_folds=2, verbose=0, random_state=1)
+                               verbose=0, random_state=1)
         f2 = NumbaCausalForest(n_trees=10, max_depth=4, min_leaf_size=5,
-                               n_folds=2, verbose=0, random_state=2)
+                               verbose=0, random_state=2)
         f1.fit(X, Y, W)
         f2.fit(X, Y, W)
         pred1 = f1.predict(X[:20])
@@ -347,7 +344,7 @@ class TestVarianceEstimator:
     def test_ci_width_scales_with_noise(self):
         """Higher outcome noise → wider confidence intervals."""
         common = dict(n_trees=40, max_depth=5, min_leaf_size=5,
-                      n_folds=2, n_quantiles=10, verbose=0, random_state=0)
+                      n_quantiles=10, verbose=0, random_state=0)
         results = {}
         for noise in (0.05, 1.0):
             X, Y, W, _ = make_data(n=300, p=3, noise=noise, seed=0)
@@ -363,8 +360,7 @@ class TestVarianceEstimator:
     def test_more_trees_reduces_variance(self):
         """Variance of the mean decreases as B grows (law of large numbers)."""
         X, Y, W, _ = make_data(n=400, p=4, noise=0.3, seed=0)
-        common = dict(max_depth=5, min_leaf_size=5, n_folds=2,
-                      n_quantiles=10, verbose=0, random_state=0)
+        common = dict(max_depth=5, min_leaf_size=5, n_quantiles=10, verbose=0, random_state=0)
         variances = {}
         for n_trees in (10, 100):
             f = NumbaCausalForest(n_trees=n_trees, **common)
@@ -387,7 +383,7 @@ class TestVarianceEstimator:
         X, Y, W, tau_true = medium_data
         forest = NumbaCausalForest(
             n_trees=80, max_depth=6, min_leaf_size=5,
-            n_folds=5, n_quantiles=15, verbose=0, random_state=0
+            n_quantiles=15, verbose=0, random_state=0
         )
         forest.fit(X, Y, W)
         _, lower, upper = forest.predict_interval(X, alpha=0.05)

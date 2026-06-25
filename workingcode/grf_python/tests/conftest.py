@@ -38,8 +38,7 @@ def fitted_forest(small_data):
     X, Y, W, _ = small_data
     forest = NumbaCausalForest(
         n_trees=30, max_depth=6, min_leaf_size=5,
-        n_quantiles=10, n_folds=2,
-        verbose=0, random_state=7
+        n_quantiles=10, verbose=0, random_state=7
     )
     forest.fit(X, Y, W)
     return forest

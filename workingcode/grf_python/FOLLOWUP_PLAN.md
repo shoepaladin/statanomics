@@ -3,6 +3,18 @@
 PR #4 is scoped to inference (the variance estimator) + the `mtry` correctness
 fix. These three items were intentionally deferred. Tracked in issue #5.
 
+> **Status (issue #5 PR):** all three items implemented.
+> 1. ✅ Timing test replaced with a deterministic correctness check; the
+>    wall-clock guard is now opt-in behind `@pytest.mark.performance`
+>    (excluded from the default run).
+> 2. ✅ `n_folds` removed (clean break) — passing it now raises `TypeError`.
+> 3. ✅ Invalid estimation leaves dropped (not zeroed) from the point average
+>    and BLB; honest min-leaf size enforced on the estimation sample during the
+>    split search. A/B: invalid (tree, point) leaf rate 0.04% → 0.0000% on the
+>    n=800 harness; non-null slope ≈0.85 / coverage ≈0.85 (was 0.84 / 0.85).
+>    Residual attenuation is finite-sample forest bias the normal CI does not
+>    model — see the statistician critique in the PR description.
+
 Suggested order: **#1 and #2 first (quick wins), then #3.**
 
 ---

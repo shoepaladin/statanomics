@@ -142,6 +142,127 @@ def find_best_split_parallel(X, Y_resid, W_resid, split_idx, tau_parent,
     return feature_indices[best_fi], best_threshold, best_score
 
 
+@jit(nopython=True, cache=True)
+def find_best_split_honest_numba(X, Y_resid, W_resid, split_idx, est_idx,
+                                 tau_parent, min_leaf, percentiles,
+                                 feature_indices):
+    """
+    Honest split search: like ``find_best_split_numba`` but also requires both
+    children to hold at least ``min_leaf`` *estimation*-sample points.
+
+    grf's ``min.node.size`` is enforced on the honest (estimation) sample, not
+    just the splitting sample.  The original split search checked only the
+    split sample, so the estimation child of an accepted split could fall below
+    ``min_leaf`` — down to 0 — producing the empty/tiny estimation leaves that
+    silently injected tau=0 into the forest average (issue #5, item 3b).  Here a
+    candidate threshold is rejected unless BOTH samples have >= ``min_leaf`` on
+    each side, so every leaf produced by an accepted split is honest-valid.
+
+    The split *score* is still computed on the splitting sample only (the
+    estimation sample must never inform the partition, or honesty is violated).
+    ``est_idx`` is used purely to veto thresholds that would orphan the
+    estimation child.
+    """
+    n_cand = len(feature_indices)
+    best_score = -np.inf
+    best_feature = -1
+    best_threshold = 0.0
+
+    pseudo = compute_pseudo_outcomes(Y_resid, W_resid, split_idx, tau_parent)
+    n_split = len(split_idx)
+    n_est = len(est_idx)
+
+    for fi in range(n_cand):
+        feat = feature_indices[fi]
+        split_vals = X[split_idx, feat]
+        est_vals = X[est_idx, feat]
+
+        sorted_vals = np.sort(split_vals)
+
+        for p_idx in range(len(percentiles)):
+            pct = percentiles[p_idx]
+            idx = int(n_split * pct / 100.0)
+            threshold = sorted_vals[min(idx, n_split - 1)]
+
+            left_mask = split_vals <= threshold
+            n_left = np.sum(left_mask)
+            n_right = n_split - n_left
+            if n_left < min_leaf or n_right < min_leaf:
+                continue
+
+            # Honest constraint: the estimation child must also be >= min_leaf.
+            n_left_est = np.sum(est_vals <= threshold)
+            n_right_est = n_est - n_left_est
+            if n_left_est < min_leaf or n_right_est < min_leaf:
+                continue
+
+            score = compute_split_score_numba(pseudo, left_mask)
+            if score > best_score:
+                best_score = score
+                best_feature = feat
+                best_threshold = threshold
+
+    return best_feature, best_threshold, best_score
+
+
+@jit(nopython=True, parallel=True, cache=True)
+def find_best_split_honest_parallel(X, Y_resid, W_resid, split_idx, est_idx,
+                                    tau_parent, min_leaf, percentiles,
+                                    feature_indices):
+    """Parallel counterpart of ``find_best_split_honest_numba`` (one feature
+    per thread).  Same honest estimation-leaf constraint."""
+    n_cand = len(feature_indices)
+    feature_scores = np.full(n_cand, -np.inf)
+    feature_thresholds = np.zeros(n_cand)
+
+    pseudo = compute_pseudo_outcomes(Y_resid, W_resid, split_idx, tau_parent)
+    n_split = len(split_idx)
+    n_est = len(est_idx)
+
+    for fi in prange(n_cand):
+        feat = feature_indices[fi]
+        split_vals = X[split_idx, feat]
+        est_vals = X[est_idx, feat]
+
+        sorted_vals = np.sort(split_vals)
+
+        best_score = -np.inf
+        best_thresh = 0.0
+
+        for p_idx in range(len(percentiles)):
+            pct = percentiles[p_idx]
+            idx = int(n_split * pct / 100.0)
+            threshold = sorted_vals[min(idx, n_split - 1)]
+
+            left_mask = split_vals <= threshold
+            n_left = np.sum(left_mask)
+            n_right = n_split - n_left
+            if n_left < min_leaf or n_right < min_leaf:
+                continue
+
+            n_left_est = np.sum(est_vals <= threshold)
+            n_right_est = n_est - n_left_est
+            if n_left_est < min_leaf or n_right_est < min_leaf:
+                continue
+
+            score = compute_split_score_numba(pseudo, left_mask)
+            if score > best_score:
+                best_score = score
+                best_thresh = threshold
+
+        feature_scores[fi] = best_score
+        feature_thresholds[fi] = best_thresh
+
+    best_fi = np.argmax(feature_scores)
+    best_score = feature_scores[best_fi]
+    best_threshold = feature_thresholds[best_fi]
+
+    if best_score == -np.inf:
+        return -1, 0.0, -np.inf
+
+    return feature_indices[best_fi], best_threshold, best_score
+
+
 @jit(nopython=True, parallel=True, cache=True)
 def traverse_tree_batch(X_test, features, thresholds, left_children,
                          right_children, est_starts, est_sizes,
@@ -219,6 +340,46 @@ def batch_predict_from_leaves(Y_resid, W_resid, leaf_indices, leaf_sizes):
         preds[i] = np.dot(W, Y) / denom
 
     return preds
+
+
+@jit(nopython=True, parallel=True, cache=True)
+def batch_predict_from_leaves_masked(Y_resid, W_resid, leaf_indices, leaf_sizes):
+    """
+    Like ``batch_predict_from_leaves`` but also returns a per-test-point
+    validity flag.
+
+    A leaf is *invalid* for a test point when it holds fewer than 2 estimation
+    points or its treatment residuals are (numerically) constant (W'W ~= 0),
+    so the within-leaf OLS tau is undefined.  The original code silently
+    returned tau=0 for such leaves; averaged into the forest that injects a
+    pull toward the null (issue #5, item 3a).  Returning a validity mask lets
+    the forest *drop* these (tree, point) contributions from both the point
+    estimate and the BLB variance — mirroring grf's "good group" handling —
+    instead of treating an undefined estimate as a hard zero.
+
+    Returns
+    -------
+    preds : float array (n_test,)   tau for valid leaves, 0.0 where invalid.
+    valid : bool  array (n_test,)   True where the leaf produced a usable tau.
+    """
+    n_test = leaf_indices.shape[0]
+    preds = np.zeros(n_test)
+    valid = np.zeros(n_test, dtype=np.bool_)
+
+    for i in prange(n_test):
+        size = leaf_sizes[i]
+        if size < 2:
+            continue
+        idx = leaf_indices[i, :size]
+        W = W_resid[idx]
+        Y = Y_resid[idx]
+        denom = np.dot(W, W)
+        if denom < 1e-10:
+            continue
+        preds[i] = np.dot(W, Y) / denom
+        valid[i] = True
+
+    return preds, valid
 
 
 @jit(nopython=True, parallel=True, cache=True)
@@ -449,6 +610,77 @@ def compute_blb_variance(tree_preds, group_size):
     # smoothly maps the (possibly negative) naive estimate to a positive value
     # instead of truncating at 0, which keeps CI coverage calibrated.
     se = np.maximum(v_between, correction) * np.sqrt(2.0 / G)
+    zstat = naive / np.clip(se, 1e-10, np.inf)
+    numerator = np.exp(-(zstat ** 2) / 2.0) / np.sqrt(2.0 * np.pi)
+    denominator = 0.5 * erfc(-zstat / np.sqrt(2.0))
+    variances = naive + se * numerator / np.clip(denominator, 1e-10, np.inf)
+    return np.maximum(variances, 0.0)
+
+
+def compute_blb_variance_masked(tree_preds, valid_mask, group_size):
+    """
+    Bootstrap-of-little-bags variance that drops invalid (tree, point)
+    contributions instead of treating them as tau=0.
+
+    Identical to ``compute_blb_variance`` when every entry is valid; the only
+    difference is that the bag mean and the within-bag spread are computed over
+    the *valid* trees in each bag (grf's "good group" logic, issue #5 item 3a).
+    For a bag with ``cnt_g`` valid trees the within-bag correction is the
+    sampling variance of that bag's mean,
+
+        s_g^2 / cnt_g ,   s_g^2 = (1/(cnt_g - 1)) sum_{valid b} (T_b - m_g)^2 ,
+
+    which reduces to the fixed-L formula ``v_within / (L - 1)`` when cnt_g == L
+    for all bags (so the all-valid path is bit-for-bit the original estimator).
+    Bags with no valid tree drop out of the between-bag average; bags with a
+    single valid tree contribute to the between-bag spread but not to the
+    within-bag correction.  The objective-Bayes cushion uses the per-point
+    number of good bags rather than the nominal G.
+
+    Parameters
+    ----------
+    tree_preds : float array (n_trees, n_test), grouped in blocks of group_size.
+    valid_mask : bool  array (n_trees, n_test).
+    group_size : int  L >= 2.
+
+    Returns
+    -------
+    variances : float array (n_test,)  non-negative.
+    """
+    from scipy.special import erfc
+
+    B, n_test = tree_preds.shape
+    L = group_size
+    G = B // L
+    if G < 2 or L < 2:
+        return compute_variance_from_tree_preds(np.ascontiguousarray(tree_preds))
+
+    tp = tree_preds[:G * L].reshape(G, L, n_test)
+    vv = valid_mask[:G * L].reshape(G, L, n_test).astype(np.float64)
+
+    cnt = vv.sum(axis=1)                                   # (G, n_test) valid/bag
+    good = cnt >= 1.0
+    bag_sum = (vv * tp).sum(axis=1)
+    bag_mean = np.where(good, bag_sum / np.where(good, cnt, 1.0), 0.0)
+
+    n_good = good.sum(axis=0)                              # (n_test,)
+    n_good_safe = np.maximum(n_good, 1.0)
+    overall = (bag_mean * good).sum(axis=0) / n_good_safe
+
+    v_between = (((bag_mean - overall) ** 2) * good).sum(axis=0) / n_good_safe
+
+    # Within-bag mean-sampling-variance, averaged over bags with >= 2 valid.
+    sqdev = vv * (tp - bag_mean[:, None, :]) ** 2
+    ss = sqdev.sum(axis=1)                                 # (G, n_test)
+    cnt2 = cnt >= 2.0
+    s2 = np.where(cnt2, ss / np.where(cnt2, cnt - 1.0, 1.0), 0.0)
+    within_term = np.where(cnt2, s2 / np.where(cnt2, cnt, 1.0), 0.0)
+    n_within = cnt2.sum(axis=0)
+    correction = within_term.sum(axis=0) / np.maximum(n_within, 1.0)
+
+    naive = v_between - correction
+
+    se = np.maximum(v_between, correction) * np.sqrt(2.0 / np.maximum(n_good, 2.0))
     zstat = naive / np.clip(se, 1e-10, np.inf)
     numerator = np.exp(-(zstat ** 2) / 2.0) / np.sqrt(2.0 * np.pi)
     denominator = 0.5 * erfc(-zstat / np.sqrt(2.0))

@@ -66,13 +66,11 @@ X, Y, W, tau_true = make_data(800, 8, noise=0.3, seed=1)
 
 # OLD-style: 3 quantiles, all features, 2-fold unshuffled, n_jobs=1
 old_cfg = dict(n_trees=100, max_depth=8, min_leaf_size=5,
-               n_quantiles=3, mtry=8, n_folds=2,
-               n_jobs=1, verbose=0, random_state=0)
+               n_quantiles=3, mtry=8, n_jobs=1, verbose=0, random_state=0)
 
 # NEW-style: 20 quantiles, sqrt(p) features, 5-fold shuffled, n_jobs=1
 new_cfg = dict(n_trees=100, max_depth=8, min_leaf_size=5,
-               n_quantiles=20, mtry=None, n_folds=5,
-               n_jobs=1, verbose=0, random_state=0)
+               n_quantiles=20, mtry=None, n_jobs=1, verbose=0, random_state=0)
 
 t0 = time.time()
 f_old = NumbaCausalForest(**old_cfg)
@@ -198,7 +196,7 @@ Y2 = tau2_true * W2 + rng2.normal(0, 0.1, n2)
 results_q = {}
 for nq in [3, 5, 10, 20]:
     f = NumbaCausalForest(n_trees=60, max_depth=5, min_leaf_size=5,
-                          n_folds=2, n_quantiles=nq, mtry=1,
+                          n_quantiles=nq, mtry=1,
                           verbose=0, random_state=0)
     f.fit(X2, Y2, W2)
     tau_hat = f.predict(X2)
@@ -263,7 +261,7 @@ print(DIVIDER)
 np.random.seed(999)
 pre = np.random.get_state()[1][:5].copy()
 
-f_test = NumbaCausalForest(n_trees=5, n_folds=2, max_depth=3,
+f_test = NumbaCausalForest(n_trees=5, max_depth=3,
                             verbose=0, random_state=42)
 f_test.fit(X[:100], Y[:100], W[:100])
 
@@ -275,8 +273,8 @@ seed42 = np.random.get_state()[1][:5].copy()
 global_unchanged = not np.array_equal(post, seed42)
 print(f"  Global numpy RNG state reset by fit(): {'YES (bug)' if not global_unchanged else 'NO (fixed)'}")
 
-f_a = NumbaCausalForest(n_trees=10, n_folds=2, max_depth=4, verbose=0, random_state=7)
-f_b = NumbaCausalForest(n_trees=10, n_folds=2, max_depth=4, verbose=0, random_state=7)
+f_a = NumbaCausalForest(n_trees=10, max_depth=4, verbose=0, random_state=7)
+f_b = NumbaCausalForest(n_trees=10, max_depth=4, verbose=0, random_state=7)
 f_a.fit(X[:150], Y[:150], W[:150])
 f_b.fit(X[:150], Y[:150], W[:150])
 identical = np.allclose(f_a.predict(X[:20]), f_b.predict(X[:20]))

@@ -14,10 +14,11 @@ from .tree_numba import NumbaCausalTree
 from .numba_core import (
     estimate_tau_ols_numba,
     traverse_tree_batch,
-    batch_predict_from_leaves,
+    batch_predict_from_leaves_masked,
     accumulate_omega_tree,
     compute_delta_variance,
     compute_blb_variance,
+    compute_blb_variance_masked,
     compute_ij_variance,
     compute_variance_from_tree_preds,
 )
@@ -64,8 +65,6 @@ class NumbaCausalForest:
         Maximum candidate split thresholds per feature (default 20).
         Actual count is capped at min(n_quantiles, split_sample // 10)
         so it scales with available data.
-    n_folds : int
-        Cross-fitting folds for nuisance estimation (default 5, was 2).
     honesty_fraction : float
         Fraction of subsample used for determining splits (default 0.5).
     subforest_size : int
@@ -95,7 +94,7 @@ class NumbaCausalForest:
     def __init__(self, n_trees=100, subsample_ratio=0.5,
                  min_leaf_size=10, max_depth=10,
                  mtry=None, n_quantiles=20,
-                 n_folds=4, honesty_fraction=0.5,
+                 honesty_fraction=0.5,
                  subforest_size=2, variance='blb',
                  use_parallel=True, n_jobs='auto',
                  verbose=0, random_state=None):
@@ -105,7 +104,6 @@ class NumbaCausalForest:
         self.max_depth = max_depth
         self.mtry = mtry
         self.n_quantiles = n_quantiles
-        self.n_folds = n_folds
         self.honesty_fraction = honesty_fraction
         # Bootstrap-of-little-bags grouping for variance estimation.
         # Trees are grown in groups of `subforest_size` that share a common
@@ -132,7 +130,6 @@ class NumbaCausalForest:
             max_depth=self.max_depth,
             mtry=self.mtry,
             n_quantiles=self.n_quantiles,
-            n_folds=self.n_folds,
             honesty_fraction=self.honesty_fraction,
             subforest_size=self.subforest_size,
             variance=self.variance,
@@ -207,8 +204,7 @@ class NumbaCausalForest:
         self.n_features_in_ = X.shape[1]
 
         if self.verbose >= 1:
-            logger.info("Step 1/2: Cross-fitted nuisance estimation (%d folds)...",
-                        self.n_folds)
+            logger.info("Step 1/2: OOB regression-forest nuisance estimation...")
 
         Y_hat, W_hat = self._estimate_nuisance(
             self.X_train, self.Y_train, self.W_train
@@ -357,13 +353,13 @@ class NumbaCausalForest:
         grf grows ``max(50, num.trees / 4)`` trees per nuisance forest and
         takes OOB predictions (each obs predicted only by trees that did not
         include it).  We mirror that with a bagged RandomForestRegressor and
-        its ``oob_prediction_``.  This is lower-variance than the previous
-        k-fold cross-fit (which trained a separate model per held-out fold)
-        and is what makes grf's CI calibration robust at small n.
+        its ``oob_prediction_``.  This is lower-variance than a k-fold
+        cross-fit (which trains a separate model per held-out fold) and is what
+        makes grf's CI calibration robust at small n.
 
-        ``n_folds`` is retained only as a deprecated no-op fallback for any obs
-        that happens to have no OOB trees (impossible in practice at >=50
-        trees, but handled defensively).
+        For the rare obs with no OOB trees (in every bootstrap — effectively
+        impossible at >=50 trees, but handled defensively) we fall back to its
+        in-bag prediction.
         """
         n_nuisance_trees = max(50, self.n_trees // 4)
         rf_params = {
@@ -422,6 +418,10 @@ class NumbaCausalForest:
         # accumulate the forest OLS weight matrix Omega during the same loop.
         n_trees_eff = len(self.trees)
         tree_preds = np.zeros((n_trees_eff, n_test))
+        # valid_mask[b, i] is False where tree b's leaf for point i is degenerate
+        # (size < 2 or W'W ~= 0).  Such (tree, point) cells are *dropped* from
+        # the forest average and the BLB variance rather than counted as tau=0.
+        valid_mask = np.zeros((n_trees_eff, n_test), dtype=bool)
         need_omega = return_std and self.variance == 'delta'
         if need_omega:
             Omega = np.zeros((self.n, n_test), dtype=np.float64)
@@ -437,36 +437,51 @@ class NumbaCausalForest:
                 starts, sizes, flat_idx, max_leaf
             )
 
-            tree_preds[b] = batch_predict_from_leaves(
+            preds_b, valid_b = batch_predict_from_leaves_masked(
                 self.Y_resid, self.W_resid, leaf_indices, leaf_sizes
             )
+            tree_preds[b] = preds_b
+            valid_mask[b] = valid_b
 
             if need_omega:
                 accumulate_omega_tree(
                     Omega, leaf_indices, leaf_sizes, self.W_resid, n_trees_eff
                 )
 
-        tau_hat = np.mean(tree_preds, axis=0)
+        # Point estimate: average over the trees with a valid leaf at each point.
+        # Falls back to a plain mean only for the (degenerate) point that has no
+        # valid tree at all, where there is nothing better to report.
+        valid_count = valid_mask.sum(axis=0)
+        masked_sum = np.where(valid_mask, tree_preds, 0.0).sum(axis=0)
+        tau_hat = np.where(valid_count > 0,
+                           masked_sum / np.maximum(valid_count, 1),
+                           np.mean(tree_preds, axis=0))
 
         if not return_std:
             return tau_hat
 
-        variances = self._compute_variance(tree_preds,
+        variances = self._compute_variance(tree_preds, valid_mask,
                                            Omega if need_omega else None)
         std = np.sqrt(np.maximum(variances, 0.0))
         return tau_hat, std
 
-    def _compute_variance(self, tree_preds, Omega):
+    def _compute_variance(self, tree_preds, valid_mask, Omega):
         """
         Dispatch to the configured variance estimator.
 
         'blb'   : bootstrap-of-little-bags (default) — calibrated at moderate B.
         'delta' : delta-method OLS-weight variance.
         'ij'    : bias-corrected infinitesimal jackknife (needs large B).
+
+        ``valid_mask`` (n_trees, n_test) marks the (tree, point) cells whose
+        leaf produced a usable tau; the BLB estimator drops the invalid cells
+        (grf "good group" logic) instead of treating them as tau=0.
         """
         method = self.variance
         if method == 'blb':
-            return compute_blb_variance(tree_preds, self._subforest_size)
+            return compute_blb_variance_masked(
+                tree_preds, valid_mask, self._subforest_size
+            )
         if method == 'delta':
             return compute_delta_variance(Omega, self.Y_resid)
         if method == 'ij':
@@ -523,12 +538,14 @@ class NumbaCausalForest:
                 X[oob_idx], feats, threshs, left_ch, right_ch,
                 starts, sizes, flat_idx, max_leaf
             )
-            preds = batch_predict_from_leaves(
+            preds, valid = batch_predict_from_leaves_masked(
                 self.Y_resid, self.W_resid, leaf_indices, leaf_sizes
             )
 
-            oob_sum[oob_idx] += preds
-            oob_count[oob_idx] += 1
+            # Only accumulate trees whose leaf produced a usable tau, so a
+            # degenerate leaf does not pull the OOB estimate toward 0.
+            oob_sum[oob_idx] += np.where(valid, preds, 0.0)
+            oob_count[oob_idx] += valid.astype(int)
 
         oob_tau = np.where(oob_count > 0, oob_sum / oob_count, np.nan)
         return oob_tau

@@ -9,8 +9,7 @@ def run(n,B,reps,bypass_nuisance):
     for r in range(reps):
         rng=np.random.default_rng(r*37+7)
         X=rng.standard_normal((n,5)); W=rng.binomial(1,.5,n).astype(float); Y=rng.standard_normal(n)
-        cf=NumbaCausalForest(n_trees=B,max_depth=8,min_leaf_size=10,n_folds=4,
-                             n_quantiles=20,n_jobs=1,subforest_size=4,variance='blb',random_state=r*13)
+        cf=NumbaCausalForest(n_trees=B,max_depth=8,min_leaf_size=10,n_quantiles=20,n_jobs=1,subforest_size=4,variance='blb',random_state=r*13)
         if bypass_nuisance:
             cf._estimate_nuisance=lambda X,Y,W:(np.zeros(len(X)), np.full(len(X),0.5))
         cf.fit(X,Y,W)

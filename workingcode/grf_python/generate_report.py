@@ -93,7 +93,7 @@ print("Fitting NEW forest …")
 t0 = time.time()
 forest_new = NumbaCausalForest(
     n_trees=200, max_depth=8, min_leaf_size=10,
-    n_folds=4, n_quantiles=20, mtry=None,
+    n_quantiles=20, mtry=None,
     n_jobs=1, random_state=RNG_SEED
 )
 forest_new.fit(X_tr, Y_tr, W_tr)
@@ -105,7 +105,7 @@ print("Fitting OLD-style forest (mtry=sqrt(p), 2-fold no-shuffle) …")
 t0 = time.time()
 forest_old = NumbaCausalForest(
     n_trees=200, max_depth=8, min_leaf_size=10,
-    n_folds=2, n_quantiles=20,
+    n_quantiles=20,
     mtry=max(1, math.ceil(math.sqrt(X_tr.shape[1]))),  # old: sqrt(p)
     n_jobs=1, random_state=RNG_SEED
 )
@@ -177,7 +177,7 @@ for _r in range(_null_reps):
 
     _f = NumbaCausalForest(
         n_trees=200, max_depth=8, min_leaf_size=10,
-        n_folds=4, n_quantiles=20, n_jobs=1, random_state=_r * 7
+        n_quantiles=20, n_jobs=1, random_state=_r * 7
     )
     _f.fit(_X_r, _Y_r, _W_r)
 
