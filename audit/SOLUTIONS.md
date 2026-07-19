@@ -9,6 +9,34 @@ Conventions: `e = ê(X)` propensity score, `m0/m1` outcome regressions, `p̂ = E
 sample size after trimming. "Influence-function SE" = `np.std(ψ)/√n` with ψ the (mean-zero)
 first-order influence function of the estimator.
 
+## Verification & scrutiny status
+
+Two independent scrutiny subagents (one per file) were dispatched to adversarially check every fix;
+both terminated early on an account session limit before delivering full verdicts. The critical,
+error-prone fixes were therefore re-verified directly by simulation
+(`audit/replication/verify_fixes.py`, plus the subagents' partial `scrutiny_st_*` scripts), with
+these results:
+
+| Fix | Check | Result |
+|---|---|---|
+| S-2/3 IPW Hájek | 400-rep sim, oracle `e` | ATE 1.001 / ATT 1.114 unbiased; **SE/MC-sd ratio 1.01–1.02** (calibrated). Old ATT ≈ P(D=1)·ATT confirmed |
+| S-5 DML-IRM ATT | 400-rep sim, correct vs. constant-0 outcome model | point estimate **doubly-robust**: bias +0.001 (correct m0) and +0.004 (badly misspecified m0, correct e) — the orthogonality the old score lacked |
+| S-6/S-7 secondstage | numeric | `einsum('ij,jk,ik->i')` == `diag(Xd V Xd')`; columns align (`params=[const,t,t_x]` ↔ `Xd=[ones,het]`); intercept (0.71) no longer enters the CATE |
+| P-5 / P-6 permutations | construction | exactly `L` valid cyclic shifts, post index rotated through all positions, no `-0` slice |
+| P-1 SDID weights | audit `repro4b` | corrected program recovers ATT to +0.3% vs. the −22% biased original |
+
+**Still requiring independent verification before merge** (not confirmed here):
+- **S-10 (Oster δ formula)** — the R² fix is certain; the δ algebra is *unverified* and must be
+  checked term-by-term against `psacalc` with a published-example regression test. Do not merge the
+  formula on this document's authority alone.
+- **P-7 (CWZ re-estimation)** — the proposed `pvalue_calc` **changes the function signature** and
+  will break its current callers (`ci_calc`, `collect_sc_outputs_aggregate`, `conformal_from_trajectory`);
+  it is a design sketch requiring those call sites and each model's `fit_counterfactual` closure to
+  be written, not a drop-in edit.
+- **P-4 (clustered SE)** — confirm `statsmodels`' `cov_type='cluster'` default small-sample/G−1
+  correction on your version; add the wild-cluster bootstrap for few treated clusters.
+- **P-3 full estimator, S-15 bootstrap clustering** — new code, needs its own tests.
+
 ---
 
 ## Part I — `stnomics.py`
